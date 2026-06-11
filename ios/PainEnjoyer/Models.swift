@@ -225,12 +225,12 @@ struct PlanWeek: Codable, Identifiable {
 }
 
 extension PlannedWorkout {
-    /// Shared status color: future-blue, done-green, skipped-red.
+    /// Shared status color: future-orange, done-green, skipped-red.
     var statusColor: Color {
         switch status {
         case "done": return .green
         case "skipped": return .red
-        default: return .blue
+        default: return .orange
         }
     }
 }

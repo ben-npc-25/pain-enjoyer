@@ -158,19 +158,32 @@ routerAdd(
       const engine = require(`${__hooks}/engine.js`);
 
       const engineFacts = engine.forLLM(engine.computeEngineState(e.app));
-      const review = llm.generate(
-        "daily",
-        persona,
+      const trends = engine.trendFacts(e.app);
+      const prompt =
         "Today is " + new Date().toISOString().slice(0, 10) + ".\n\n" +
-          "Training engine — deterministic state (quote numbers verbatim, never recompute): " +
-          JSON.stringify(engineFacts) +
-          "\n\nThe athlete is looking at their trend charts (weekly volume, HRV, " +
-          "resting HR, per-run fitness scores). Give 2–4 plain sentences of " +
-          "perspective on the trajectory — volume, recovery, fitness, intensity " +
-          "balance. No greetings, no headings."
-      );
-      coach.saveCoachMessage(e.app, "weekly_review", review, llm.provider());
-      return e.json(200, { review: review, provider: llm.provider() });
+        "Training engine — deterministic state (quote numbers verbatim, never recompute): " +
+        JSON.stringify(engineFacts) +
+        "\n\nTrend summaries (pre-computed): " + JSON.stringify(trends) +
+        "\n\nThe athlete is reading their trend charts. Respond with STRICT JSON " +
+        "only (no fences, no prose around it):\n" +
+        '{"volume":"…","hrv":"…","resting_hr":"…","vo2max_health":"…","fitness":"…"}\n' +
+        "Each value: 1–2 plain sentences interpreting that specific chart for " +
+        "this athlete. vo2max_health should read the VO2max + recovery picture " +
+        "as a personal-health signal. No greetings, no headings.";
+
+      let parsed;
+      try {
+        parsed = llm.parseJSONLoose(llm.generate("trends", persona, prompt));
+      } catch (err) {
+        console.log("trends JSON unusable, retrying once:", String(err));
+        parsed = llm.parseJSONLoose(llm.generate("trends", persona, prompt));
+      }
+      const clean = {};
+      ["volume", "hrv", "resting_hr", "vo2max_health", "fitness"].forEach(function (k) {
+        if (parsed && typeof parsed[k] === "string") clean[k] = parsed[k].slice(0, 600);
+      });
+      coach.saveCoachMessage(e.app, "weekly_review", JSON.stringify(clean), llm.provider());
+      return e.json(200, { review: clean, provider: llm.provider() });
     } catch (err) {
       console.log("trends-review failed:", String(err));
       return e.json(502, { error: String(err) });

@@ -125,7 +125,19 @@ function mockGenerate(tier) {
   return specific || $os.getenv("LLM_MOCK_RESPONSE") || "mock response";
 }
 
+// Fence/prose-tolerant JSON extraction for structured LLM responses.
+function parseJSONLoose(text) {
+  let t = String(text).trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const start = t.indexOf("{");
+  const end = t.lastIndexOf("}");
+  if (start === -1 || end <= start) throw new Error("LLM returned no JSON object");
+  return JSON.parse(t.slice(start, end + 1));
+}
+
 module.exports = {
+  parseJSONLoose: parseJSONLoose,
   provider: () => $os.getenv("LLM_PROVIDER") || "gemini",
   generate: function (tier, persona, prompt) {
     const p = $os.getenv("LLM_PROVIDER") || "gemini";

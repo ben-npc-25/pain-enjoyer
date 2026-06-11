@@ -14,8 +14,8 @@ struct CoachHomeView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     heroCard
+                    latestActivityCard
                     weekStrip
-                    coachCard
                     if !model.status.isEmpty {
                         Text(model.status)
                             .font(.footnote)
@@ -156,44 +156,47 @@ struct CoachHomeView: View {
         .padding(.horizontal)
     }
 
-    // MARK: coach card
+    // MARK: latest activity (the thing you did most recently)
 
-    private var coachCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Coach", systemImage: "figure.run.circle.fill")
-                    .font(.headline)
-                Spacer()
-                if let p = model.coachMessage?.provider {
-                    Text(p).font(.caption2).foregroundStyle(.tertiary)
+    @ViewBuilder
+    private var latestActivityCard: some View {
+        if let run = model.runs.first {
+            NavigationLink {
+                RunDetailView(run: run, zones: model.zonesSec) { r, notes in
+                    Task { await model.saveNotes(for: r, notes: notes) }
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("LATEST ACTIVITY")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(run.startDate.formatted(.relative(presentation: .named)))
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(String(format: "%.2f km", run.distanceKm))
+                            .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        RunTypeChip(type: run.runClass(zones: model.zonesSec))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.bold()).foregroundStyle(.tertiary)
+                    }
+                    HStack(spacing: 16) {
+                        Label(run.durationString, systemImage: "stopwatch")
+                        Label(run.paceString, systemImage: "speedometer")
+                        if let hr = run.avg_hr, hr > 0 {
+                            Label("\(Int(hr)) bpm", systemImage: "heart")
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
             }
-            if let msg = model.coachMessage {
-                CoachProse(text: msg.content)
-            } else {
-                Text("No advice yet — pull to refresh, then ask.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 10) {
-                Button {
-                    Task { await model.askCoach() }
-                } label: {
-                    if model.busy { ProgressView().frame(maxWidth: .infinity) }
-                    else { Text("Ask the coach").frame(maxWidth: .infinity) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.busy)
-
-                Button {
-                    model.openChat()
-                } label: {
-                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
+            .buttonStyle(.plain)
+            .cardStyle()
+            .padding(.horizontal)
         }
-        .cardStyle()
-        .padding(.horizontal)
     }
 }

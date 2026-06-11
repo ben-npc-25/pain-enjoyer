@@ -71,6 +71,7 @@ LLM_PROVIDER=mock \
 LLM_MOCK_RESPONSE_DAILY="Canned coach reply: ease back into it." \
 LLM_MOCK_RESPONSE_WEEKLY="$MOCK_WEEKLY" \
 LLM_MOCK_RESPONSE_DISTILL="$MOCK_DISTILL" \
+LLM_MOCK_RESPONSE_TRENDS='{"volume":"Volume is at zero while you heal.","hrv":"HRV is depressed vs baseline.","resting_hr":"RHR slightly elevated.","vo2max_health":"VO2max steady - health signal OK.","fitness":"Fitness decays slowly; patience."}' \
 "$PB_BIN" serve --dir "$WORK/pb_data" \
   --hooksDir "$REPO/server/pb_hooks" \
   --migrationsDir "$REPO/server/pb_migrations" \
@@ -293,7 +294,11 @@ print("  ✓ score components match hand computation (score %.2f)" % r["score"])
 # ── 11. M6: trends review ────────────────────────────────────────────────
 echo "· M6: trends review…"
 curl -fsS -X POST "$BASE/api/coach/trends-review" -H "Authorization: $TOKEN" |
-  python3 -c 'import sys,json; r=json.load(sys.stdin); assert "Canned coach reply" in r["review"], r; print("  ✓ trends review flows")'
+  python3 -c '
+import sys, json
+r = json.load(sys.stdin)["review"]
+assert set(r.keys()) == {"volume", "hrv", "resting_hr", "vo2max_health", "fitness"}, r
+print("  ✓ trends review: structured per-chart commentary")'
 curl -fsS -G "$BASE/api/collections/coach_messages/records" \
   --data-urlencode "filter=kind = 'weekly_review'" --data-urlencode "perPage=1" \
   -H "Authorization: $TOKEN" |

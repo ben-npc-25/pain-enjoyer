@@ -9,14 +9,15 @@ struct PlanView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    if !model.status.isEmpty {
+                        Text(model.status)
+                            .font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
+                    }
                     raceCard
                     if let vdot = model.engine?.vdot.value { predictorCard(vdot) }
                     weeksSection
-                    if !model.status.isEmpty {
-                        Text(model.status)
-                            .font(.footnote)
-                            .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
-                    }
                 }
                 .padding()
             }
@@ -26,7 +27,8 @@ struct PlanView: View {
                 Button {
                     Task { await model.generatePlan() }
                 } label: {
-                    Label("Plan next week", systemImage: "calendar.badge.plus")
+                    if model.busy { ProgressView() }
+                    else { Label("Plan next week", systemImage: "calendar.badge.plus") }
                 }
                 .disabled(model.busy)
             }

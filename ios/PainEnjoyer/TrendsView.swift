@@ -10,20 +10,37 @@ struct TrendsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    card("Weekly volume", subtitle: "last 12 weeks") { volumeChart }
-                    card("Heart-rate variability", subtitle: "30 days vs baseline") {
+                    if !model.status.isEmpty {
+                        Text(model.status)
+                            .font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
+                    }
+                    card("Weekly volume", subtitle: "last 12 weeks", note: "volume") { volumeChart }
+                    card("Heart-rate variability", subtitle: "30 days vs baseline", note: "hrv") {
                         recoveryChart(\.hrv_sdnn_ms, unit: "ms", color: .teal)
                     }
-                    card("Resting heart rate", subtitle: "30 days vs baseline") {
+                    card("Resting heart rate", subtitle: "30 days vs baseline", note: "resting_hr") {
                         recoveryChart(\.resting_hr, unit: "bpm", color: .pink)
                     }
-                    card("Effort score per run", subtitle: "single-run VDOT, 180 days") { vdotChart }
-                    coachReviewCard
+                    card("VO₂max", subtitle: "90 days — your health signal", note: "vo2max_health") {
+                        recoveryChart(\.vo2max, unit: "ml/kg·min", color: .indigo, days: 90)
+                    }
+                    card("Effort score per run", subtitle: "single-run VDOT, 180 days", note: "fitness") { vdotChart }
                 }
                 .padding()
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Trends")
+            .toolbar {
+                Button {
+                    Task { await model.trendsReview() }
+                } label: {
+                    if model.busy { ProgressView() }
+                    else { Label("Coach's read", systemImage: "sparkles") }
+                }
+                .disabled(model.busy)
+            }
             .refreshable { await model.refresh() }
         }
     }
@@ -31,7 +48,7 @@ struct TrendsView: View {
     // MARK: chart cards
 
     @ViewBuilder
-    private func card(_ title: String, subtitle: String,
+    private func card(_ title: String, subtitle: String, note key: String,
                       @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -40,6 +57,16 @@ struct TrendsView: View {
                 Text(subtitle).font(.caption).foregroundStyle(.tertiary)
             }
             content()
+            if let text = commentary?[key], !text.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "figure.run.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Color.accentColor)
+                    CoachProse(text: text, font: .footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            }
         }
         .cardStyle()
     }
@@ -93,8 +120,8 @@ struct TrendsView: View {
 
     @ViewBuilder
     private func recoveryChart(_ keyPath: KeyPath<RecoveryFull, Double?>,
-                               unit: String, color: Color) -> some View {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now)!
+                               unit: String, color: Color, days: Int = 30) -> some View {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: .now)!
         let points = model.recovery
             .compactMap { row -> (Date, Double)? in
                 guard let v = row[keyPath: keyPath], v > 0, row.day >= cutoff else { return nil }
@@ -168,33 +195,18 @@ struct TrendsView: View {
         }
     }
 
-    // MARK: coach's read on the charts (M6)
+    // MARK: coach's per-chart commentary (M6.1 — structured weekly_review JSON)
 
     private var latestReview: CoachMessage? {
         model.messages.last { $0.kind == "weekly_review" && !$0.isAthlete }
     }
 
-    private var coachReviewCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Coach's read", systemImage: "figure.run.circle.fill").font(.headline)
-                Spacer()
-                Button {
-                    Task { await model.trendsReview() }
-                } label: {
-                    if model.busy { ProgressView() }
-                    else { Label("Refresh", systemImage: "sparkles").font(.footnote) }
-                }
-                .disabled(model.busy)
-            }
-            if let review = latestReview {
-                CoachProse(text: review.content, font: .subheadline)
-            } else {
-                Text("Tap refresh and the coach will comment on what these charts say.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-        .cardStyle()
+    private var commentary: [String: String]? {
+        guard let raw = latestReview?.content,
+              let data = raw.data(using: .utf8),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return nil }
+        return dict
     }
 
     private func placeholder(_ text: String) -> some View {

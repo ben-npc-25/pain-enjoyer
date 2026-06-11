@@ -520,9 +520,51 @@ function forLLM(state) {
   return f;
 }
 
+// M6.1: compact, pre-formatted trend summaries for the per-chart coach
+// commentary (deterministic — the LLM only interprets these).
+function trendFacts(app) {
+  const now = new Date();
+  const runs = loadRuns(app, now, 60);
+  const rec = loadRecovery(app, now, 90);
+
+  const weeks = [0, 0, 0, 0]; // 7-day buckets back from today
+  for (const r of runs) {
+    const idx = Math.floor(daysAgo(r.date, now) / 7);
+    if (idx >= 0 && idx < 4) weeks[idx] += r.distM / 1000;
+  }
+  const weeklyStr = weeks.slice().reverse().map(function (k) { return round(k, 1); })
+    .join(", ") + " km (oldest week → this week)";
+
+  function avg(arr) {
+    return arr.length ? arr.reduce(function (a, b) { return a + b; }, 0) / arr.length : null;
+  }
+  const hrv7 = avg(rec.filter(function (r) { return r.hrv > 0 && daysAgo(r.date, now) < 7; }).map(function (r) { return r.hrv; }));
+  const hrvMed = median(rec.map(function (r) { return r.hrv; }).filter(function (x) { return x > 0; }));
+  const rhr7 = avg(rec.filter(function (r) { return r.rhr > 0 && daysAgo(r.date, now) < 7; }).map(function (r) { return r.rhr; }));
+  const rhrMed = median(rec.map(function (r) { return r.rhr; }).filter(function (x) { return x > 0; }));
+  const vo2s = rec.filter(function (r) { return r.vo2max > 0; }); // newest first
+  const vo2New = vo2s.length ? vo2s[0] : null;
+  const vo2Old = vo2s.length > 1 ? vo2s[vo2s.length - 1] : null;
+
+  return {
+    weekly_volume_last_4: weeklyStr,
+    hrv: hrv7 && hrvMed
+      ? Math.round(hrv7) + " ms 7-day avg vs " + Math.round(hrvMed) + " ms 90-day median"
+      : "no HRV data yet",
+    resting_hr: rhr7 && rhrMed
+      ? Math.round(rhr7) + " bpm 7-day avg vs " + Math.round(rhrMed) + " bpm 90-day median"
+      : "no resting-HR data yet",
+    vo2max: vo2New
+      ? round(vo2New.vo2max, 1) + " ml/kg/min on " + isoDay(vo2New.date) +
+        (vo2Old ? " (vs " + round(vo2Old.vo2max, 1) + " on " + isoDay(vo2Old.date) + ")" : "")
+      : "no VO2max data yet",
+  };
+}
+
 module.exports = {
   computeEngineState: computeEngineState,
   forLLM: forLLM,
+  trendFacts: trendFacts,
   // exposed for the smoke test
   _vdotForEffort: vdotForEffort,
   _paceSecPerKmForFraction: paceSecPerKmForFraction,

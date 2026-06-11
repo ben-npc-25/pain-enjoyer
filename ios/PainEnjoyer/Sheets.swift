@@ -113,8 +113,8 @@ struct DayDetailSheet: View {
         switch status {
         case "done": return .green
         case "skipped": return .red
-        case "modified": return .orange
-        default: return .blue
+        case "modified": return .purple
+        default: return .orange
         }
     }
 }
@@ -126,13 +126,32 @@ struct ChatView: View {
     @State private var draft = ""
     @FocusState private var inputFocused: Bool
 
+    /// Fresh slate each day: only the last 24 h shows. Full history stays on
+    /// the server; coach_memory carries the long-term context.
+    private var sessionMessages: [CoachMessage] {
+        let cutoff = Date.now.addingTimeInterval(-24 * 3600)
+        return model.messages.filter { msg in
+            guard let created = msg.created,
+                  let d = RunRecord.pbDateFormatter.date(from: created) else { return true }
+            return d >= cutoff
+        }
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 10) {
-                            ForEach(model.messages) { msg in
+                            if sessionMessages.isEmpty && !model.chatBusy {
+                                ContentUnavailableView(
+                                    "Fresh slate",
+                                    systemImage: "bubble.left.and.bubble.right",
+                                    description: Text("Say anything — the coach still remembers what matters from before.")
+                                )
+                                .padding(.top, 60)
+                            }
+                            ForEach(sessionMessages) { msg in
                                 bubble(msg)
                             }
                             if model.chatBusy {
@@ -144,7 +163,7 @@ struct ChatView: View {
                         .padding()
                     }
                     .onChange(of: model.messages.count, initial: true) { _, _ in
-                        if let last = model.messages.last?.id {
+                        if let last = sessionMessages.last?.id {
                             withAnimation { proxy.scrollTo(last, anchor: .bottom) }
                         }
                     }
@@ -172,6 +191,16 @@ struct ChatView: View {
             }
             .navigationTitle("Coach chat")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // structured "what should I do today" advice, lands in the thread
+                Button {
+                    Task { await model.askCoach() }
+                } label: {
+                    if model.busy { ProgressView() }
+                    else { Label("Today's advice", systemImage: "sparkles") }
+                }
+                .disabled(model.busy || model.chatBusy)
+            }
             // M5: prefilled drafts arrive from quick actions elsewhere
             .onChange(of: model.chatPrefill, initial: true) { _, prefill in
                 if !prefill.isEmpty {
@@ -483,35 +512,6 @@ struct EngineDetailSheet: View {
             .navigationTitle("Training engine")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() } }
-        }
-    }
-}
-
-// MARK: - HealthKit field audit
-
-struct AuditSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var report = "Running audit…"
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                Text(report)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .textSelection(.enabled)
-            }
-            .navigationTitle("HealthKit audit")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .primaryAction) { ShareLink(item: report) }
-            }
-            .task {
-                try? await HealthKitService.shared.requestAuthorization()
-                report = await HealthKitService.shared.auditReport()
-            }
         }
     }
 }

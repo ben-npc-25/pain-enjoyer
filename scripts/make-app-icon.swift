@@ -25,7 +25,7 @@ func rgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) -> CGColor {
 
 // bright diagonal gradient: coral → amber
 let bg = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                    colors: [rgb(1.00, 0.36, 0.15), rgb(1.00, 0.70, 0.20)] as CFArray,
+                    colors: [rgb(0.08, 0.38, 0.95), rgb(0.15, 0.75, 1.00)] as CFArray,
                     locations: [0, 1])!
 ctx.drawLinearGradient(bg, start: CGPoint(x: 0, y: 0),
                        end: CGPoint(x: 1024, y: 1024), options: [])
@@ -45,7 +45,7 @@ for p in pts.dropFirst() { path.addLine(to: p) }
 
 // soft shadow pass under the route
 ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 36, color: rgb(0.55, 0.12, 0.0, 0.45))
+ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 36, color: rgb(0.0, 0.10, 0.45, 0.45))
 ctx.addPath(path)
 ctx.setStrokeColor(rgb(1, 1, 1))
 ctx.setLineWidth(58)
@@ -57,7 +57,7 @@ ctx.restoreGState()
 // start dot (filled) + finish ring
 ctx.setFillColor(rgb(1, 1, 1))
 ctx.fillEllipse(in: CGRect(x: pts[0].x - 56, y: pts[0].y - 56, width: 112, height: 112))
-ctx.setFillColor(rgb(1.00, 0.42, 0.18))
+ctx.setFillColor(rgb(0.10, 0.45, 0.96))
 ctx.fillEllipse(in: CGRect(x: pts[0].x - 26, y: pts[0].y - 26, width: 52, height: 52))
 
 let end = pts.last!

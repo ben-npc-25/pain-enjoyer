@@ -154,6 +154,7 @@ final class AppModel: ObservableObject {
             let resp = try await pb.askCoach()
             coachMessage = CoachMessage(id: UUID().uuidString, content: resp.advice,
                                         kind: "daily", provider: resp.provider, created: nil)
+            messages = (try? await pb.listMessages()) ?? messages // shows in chat
             status = ""
         } catch {
             status = "✗ \(error.localizedDescription)"

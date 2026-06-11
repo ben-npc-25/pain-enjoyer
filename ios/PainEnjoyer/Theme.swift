@@ -55,7 +55,7 @@ struct Wordmark: View {
                 .font(.system(.title3, design: .rounded).weight(.heavy))
         }
         .foregroundStyle(
-            LinearGradient(colors: [Color.accentColor, .orange],
+            LinearGradient(colors: [Color.accentColor, .cyan],
                            startPoint: .leading, endPoint: .trailing)
         )
     }

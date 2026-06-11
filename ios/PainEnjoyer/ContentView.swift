@@ -52,7 +52,6 @@ struct CalendarTabView: View {
     @ObservedObject var model: AppModel
 
     @State private var showManualEntry = false
-    @State private var showAudit = false
     @State private var selectedDay: DaySelection?
 
     var body: some View {
@@ -79,7 +78,6 @@ struct CalendarTabView: View {
             .navigationTitle("Calendar")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showAudit = true } label: { Image(systemName: "waveform.path.ecg") }
                     Button { showManualEntry = true } label: { Image(systemName: "plus") }
                 }
             }
@@ -90,7 +88,6 @@ struct CalendarTabView: View {
                                                     durationMin: min, avgHR: hr) }
                 }
             }
-            .sheet(isPresented: $showAudit) { AuditSheet() }
             .sheet(item: $selectedDay) { sel in
                 DayDetailSheet(
                     dayKey: sel.dayKey,
