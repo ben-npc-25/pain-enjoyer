@@ -11,8 +11,13 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   signed and installed on Ben's iPhone via `devicectl`, launches. Signing: free
   personal team `4YC3X253S5` ("ben Ng"), pinned as `DEVELOPMENT_TEAM` in
   `ios/project.yml` so xcodegen regens keep it (team ID = cert's **OU**, not
-  the parenthetical in the cert name). Xcode-managed profile + install expire
-  **2026-06-18** (7-day free account) — re-deploy weekly.
+  the parenthetical in the cert name). Profiles expire every **7 days**
+  (free account) — **automated**: launchd agent
+  `com.benng.painenjoyer.refresh` re-signs + reinstalls Sun & Wed 21:00
+  (`scripts/refresh-app.sh`, log `~/Library/Logs/pain-enjoyer-refresh.log`,
+  macOS notification on outcome). Needs Mac awake + phone reachable; on
+  failure run the script manually. Xcode Apple-ID session may occasionally
+  need an interactive re-login (job fails loudly when so).
 - **M1 closed 2026-06-11**: ① calendar ✓ ② field audit ✓ ③ background sync
   **waived by Ben (injured, not running)** — the observer + background
   delivery code is registered and compiles, but has never been observed
