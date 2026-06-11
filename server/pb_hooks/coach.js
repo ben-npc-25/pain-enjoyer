@@ -12,14 +12,22 @@ function latestRunFacts(app) {
   const distM = run.getFloat("distance_m");
   const durS = run.getFloat("duration_s");
   const distKm = distM / 1000;
-  // Deterministic spine: pace is computed HERE, never by the LLM (PLAN.md §1).
-  const paceMinKm = distKm > 0 ? durS / 60 / distKm : 0;
+  // Deterministic spine: pace is computed AND formatted here — handing the
+  // LLM a decimal once produced "5:79/km" in testing. Numbers never leave
+  // the server unformatted (PLAN.md §1).
+  const paceSecPerKm = distKm > 0 ? durS / distKm : 0;
+  const paceMin = Math.floor(paceSecPerKm / 60);
+  const paceSec = Math.round(paceSecPerKm % 60);
+  const pace =
+    paceSecPerKm > 0
+      ? paceMin + ":" + (paceSec < 10 ? "0" : "") + paceSec + " min/km"
+      : null;
 
   return {
     date: run.getString("date"),
     distance_km: Math.round(distKm * 100) / 100,
     duration_min: Math.round((durS / 60) * 10) / 10,
-    avg_pace_min_per_km: Math.round(paceMinKm * 100) / 100,
+    avg_pace: pace, // pre-formatted "5:47 min/km" — the only pace the LLM sees
     avg_hr: run.getFloat("avg_hr") || null,
     elevation_gain_m: run.getFloat("elevation_gain_m") || null,
     source_app: run.getString("source_app") || null,

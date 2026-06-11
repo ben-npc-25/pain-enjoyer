@@ -1,80 +1,102 @@
 import SwiftUI
 
-/// M0 screen: connect → sync latest run → show the coach's advice.
-/// The calendar UI replaces this as the home screen in M1.
+/// M1 home screen: calendar + coach card. Sheets for settings / manual entry /
+/// day detail / HealthKit audit.
 struct ContentView: View {
+    @StateObject private var model = AppModel()
     @AppStorage("serverURL") private var serverURL = ""
-    @AppStorage("email") private var email = ""
-    @AppStorage("password") private var password = "" // POC only — Keychain in M1
 
-    @State private var status = "Not connected"
-    @State private var advice: String?
-    @State private var provider: String?
-    @State private var busy = false
-
-    private let health = HealthKitService()
+    @State private var showSettings = false
+    @State private var showManualEntry = false
+    @State private var showAudit = false
+    @State private var selectedDay: DaySelection?
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Server") {
-                    TextField("https://pi.tailnet.ts.net", text: $serverURL)
-                        .textInputAutocapitalization(.never).keyboardType(.URL)
-                    TextField("Email", text: $email)
-                        .textInputAutocapitalization(.never).keyboardType(.emailAddress)
-                    SecureField("Password", text: $password)
-                }
-
-                Section {
-                    Button {
-                        Task { await syncAndAdvise() }
-                    } label: {
-                        if busy { ProgressView() } else { Text("Sync latest run → Coach 🏃") }
+            ScrollView {
+                VStack(spacing: 16) {
+                    CalendarView(runsByDay: model.runsByDay) { dayRuns in
+                        selectedDay = DaySelection(runs: dayRuns)
                     }
-                    .disabled(busy || serverURL.isEmpty || email.isEmpty || password.isEmpty)
-                } footer: {
-                    Text(status)
-                }
 
-                if let advice {
-                    Section("Coach says\(provider.map { " (\($0))" } ?? "")") {
-                        Text(advice)
+                    coachCard
+
+                    if !model.status.isEmpty {
+                        Text(model.status)
+                            .font(.footnote)
+                            .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
                     }
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle("Pain Enjoyer 🏃")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showAudit = true } label: { Image(systemName: "waveform.path.ecg") }
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showManualEntry = true } label: { Image(systemName: "plus") }
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
-            .navigationTitle("Pain Enjoyer")
+            .refreshable { await model.refresh() }
+            .task {
+                if serverURL.isEmpty { showSettings = true }
+                else { await model.refresh() }
+            }
+            .sheet(isPresented: $showSettings, onDismiss: {
+                Task { await model.refresh() }
+            }) { SettingsSheet() }
+            .sheet(isPresented: $showManualEntry) {
+                ManualEntrySheet { date, km, min, hr in
+                    Task { await model.addManualRun(date: date, distanceKm: km,
+                                                    durationMin: min, avgHR: hr) }
+                }
+            }
+            .sheet(isPresented: $showAudit) { AuditSheet() }
+            .sheet(item: $selectedDay) { sel in
+                DayDetailSheet(runs: sel.runs) { run in
+                    Task { await model.deleteRun(run) }
+                }
+            }
         }
     }
 
-    private func syncAndAdvise() async {
-        busy = true
-        defer { busy = false }
-        do {
-            guard let url = URL(string: serverURL) else {
-                status = "Invalid server URL"; return
+    private var coachCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Coach", systemImage: "figure.run.circle.fill")
+                    .font(.headline)
+                Spacer()
+                if let p = model.coachMessage?.provider {
+                    Text(p).font(.caption2).foregroundStyle(.tertiary)
+                }
             }
-            status = "Requesting Health access…"
-            try await health.requestAuthorization()
-
-            status = "Reading latest run from Health…"
-            let run = try await health.fetchLatestRun()
-
-            status = "Connecting to the Pi…"
-            let pb = PocketBaseClient(baseURL: url)
-            try await pb.authenticate(email: email, password: password)
-
-            status = "Uploading run (\(String(format: "%.1f", run.distance_m / 1000)) km)…"
-            try await pb.uploadRun(run)
-
-            status = "Coach is thinking…"
-            let resp = try await pb.askCoach()
-            advice = resp.advice
-            provider = resp.provider
-            status = "Done — synced from \(run.source_app)."
-        } catch {
-            status = "✗ \(error.localizedDescription)"
+            if let msg = model.coachMessage {
+                Text(msg.content).font(.subheadline)
+            } else {
+                Text("No advice yet — sync a run and ask.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Button {
+                Task { await model.askCoach() }
+            } label: {
+                if model.busy { ProgressView().frame(maxWidth: .infinity) }
+                else { Text("Ask the coach").frame(maxWidth: .infinity) }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.busy)
         }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemBackground)))
+        .padding(.horizontal)
     }
+}
+
+/// Sheet item wrapper — arrays aren't Identifiable.
+struct DaySelection: Identifiable {
+    let id = UUID()
+    let runs: [RunRecord]
 }
 
 #Preview { ContentView() }

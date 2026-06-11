@@ -15,7 +15,8 @@ targets:
       path: PainEnjoyer/PainEnjoyer.entitlements
       properties:
         com.apple.developer.healthkit: true
-        # background-delivery entitlement comes in M1
+        # M1: lets iOS wake the app when new workouts land in Health
+        com.apple.developer.healthkit.background-delivery: true
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

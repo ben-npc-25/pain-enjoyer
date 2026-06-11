@@ -1,29 +1,43 @@
 import Foundation
 
-/// Minimal PocketBase REST client — only what M0 needs.
-/// (No official Swift SDK; this stays small on purpose.)
-struct AdviceResponse: Codable {
-    var advice: String
-    var provider: String
-}
-
 enum PBError: LocalizedError {
     case http(Int, String)
+    case notConfigured
     var errorDescription: String? {
-        if case let .http(code, body) = self { return "Server error \(code): \(body)" }
-        return nil
+        switch self {
+        case let .http(code, body): return "Server error \(code): \(body.prefix(200))"
+        case .notConfigured: return "Server not configured — open Settings."
+        }
     }
 }
 
+/// Minimal PocketBase REST client.
 final class PocketBaseClient {
     private let baseURL: URL
     private var token: String?
 
     init(baseURL: URL) { self.baseURL = baseURL }
 
-    private func request(_ path: String, method: String = "POST", body: Encodable? = nil) async throws -> Data {
-        var req = URLRequest(url: baseURL.appending(path: path))
+    /// Build a client from the stored settings (used by background sync too).
+    static func fromSettings() -> (client: PocketBaseClient, email: String, password: String)? {
+        let d = UserDefaults.standard
+        guard let urlStr = d.string(forKey: "serverURL"), let url = URL(string: urlStr),
+              let email = d.string(forKey: "email"), !email.isEmpty,
+              let pass = d.string(forKey: "password"), !pass.isEmpty
+        else { return nil }
+        return (PocketBaseClient(baseURL: url), email, pass)
+    }
+
+    // MARK: core request
+
+    @discardableResult
+    private func request(_ path: String, method: String = "POST",
+                         query: [URLQueryItem] = [], body: Encodable? = nil) async throws -> Data {
+        var comps = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { comps.queryItems = query }
+        var req = URLRequest(url: comps.url!)
         req.httpMethod = method
+        req.timeoutInterval = 120 // LLM calls can take a while
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { req.setValue(token, forHTTPHeaderField: "Authorization") }
         if let body { req.httpBody = try JSONEncoder().encode(AnyEncodable(body)) }
@@ -36,6 +50,10 @@ final class PocketBaseClient {
         return data
     }
 
+    private struct ListResponse<T: Codable>: Codable { let items: [T] }
+
+    // MARK: API
+
     func authenticate(email: String, password: String) async throws {
         struct Auth: Encodable { let identity: String, password: String }
         struct AuthResp: Decodable { let token: String }
@@ -44,18 +62,47 @@ final class PocketBaseClient {
         token = try JSONDecoder().decode(AuthResp.self, from: data).token
     }
 
-    /// Push a run. A 400 from the unique healthkit_uuid index means "already
-    /// synced" — treated as success so re-taps are harmless.
-    func uploadRun(_ run: RunPayload) async throws {
-        do { _ = try await request("/api/collections/runs/records", body: run) }
-        catch PBError.http(400, let body) where body.contains("healthkit_uuid") {
-            // duplicate — fine
+    func health() async throws -> Bool {
+        struct H: Decodable { let ok: Bool }
+        let data = try await request("/api/coach/health", method: "GET")
+        return try JSONDecoder().decode(H.self, from: data).ok
+    }
+
+    /// Upload a run; a duplicate (unique healthkit_uuid) counts as success.
+    /// Returns true if it was a NEW record.
+    @discardableResult
+    func uploadRun(_ run: RunPayload) async throws -> Bool {
+        do {
+            try await request("/api/collections/runs/records", body: run)
+            return true
+        } catch PBError.http(400, let body) where body.contains("healthkit_uuid") {
+            return false // already synced — fine
         }
+    }
+
+    /// All runs (single-user POC: one page of 500 covers ~2 years).
+    func listRuns() async throws -> [RunRecord] {
+        let data = try await request("/api/collections/runs/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "500"),
+                                             .init(name: "sort", value: "-date")])
+        return try JSONDecoder().decode(ListResponse<RunRecord>.self, from: data).items
+    }
+
+    func latestCoachMessage() async throws -> CoachMessage? {
+        let data = try await request("/api/collections/coach_messages/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "1"),
+                                             .init(name: "sort", value: "-created"),
+                                             .init(name: "filter", value: "(role='coach')")])
+        return try JSONDecoder().decode(ListResponse<CoachMessage>.self, from: data).items.first
     }
 
     func askCoach() async throws -> AdviceResponse {
         let data = try await request("/api/coach/advise")
         return try JSONDecoder().decode(AdviceResponse.self, from: data)
+    }
+
+    func deleteRun(id: String) async throws {
+        try await request("/api/collections/runs/records/\(id)", method: "DELETE")
     }
 }
 
