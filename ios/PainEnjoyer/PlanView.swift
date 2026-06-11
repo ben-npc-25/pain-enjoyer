@@ -4,6 +4,7 @@ import SwiftUI
 /// race times from the engine's VDOT, and the upcoming weeks day by day.
 struct PlanView: View {
     @ObservedObject var model: AppModel
+    @State private var showRaceSheet = false
 
     var body: some View {
         NavigationStack {
@@ -33,6 +34,11 @@ struct PlanView: View {
                 .disabled(model.busy)
             }
             .refreshable { await model.refresh() }
+            .sheet(isPresented: $showRaceSheet) {
+                RaceSheet(profile: model.profile) { updated in
+                    Task { await model.saveProfile(updated) }
+                }
+            }
         }
     }
 
@@ -40,49 +46,76 @@ struct PlanView: View {
 
     @ViewBuilder
     private var raceCard: some View {
-        if let profile = model.profile,
-           let name = profile.race_name, !name.isEmpty,
-           let key = model.raceDayKey,
-           let raceDate = RunRecord.pbDateFormatter.date(from: (profile.race_date ?? "")) {
-            let days = max(0, Calendar.current.dateComponents([.day], from: .now, to: raceDate).day ?? 0)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("🏁").font(.system(size: 30))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name).font(.headline)
-                        Text(key).font(.caption).foregroundStyle(.secondary)
+        Button { showRaceSheet = true } label: {
+            if let profile = model.profile,
+               let name = profile.race_name, !name.isEmpty,
+               let key = model.raceDayKey,
+               let raceDate = RunRecord.pbDateFormatter.date(from: (profile.race_date ?? "")) {
+                let days = max(0, Calendar.current.dateComponents([.day], from: .now, to: raceDate).day ?? 0)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("🏁").font(.system(size: 34))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(name)
+                                .font(.title3.weight(.heavy))
+                            Text(raceDate.formatted(.dateTime.weekday(.wide).day().month(.wide).year()))
+                                .font(.caption).opacity(0.85)
+                        }
+                        Spacer()
+                        Image(systemName: "pencil.circle.fill").font(.title3).opacity(0.8)
                     }
-                    Spacer()
-                    if let phase = model.planWeeks.first?.phase, !phase.isEmpty {
-                        Text(phase.uppercased())
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 9).padding(.vertical, 4)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("\(days)").font(.system(size: 40, weight: .heavy, design: .rounded))
-                    Text("days · \(days / 7) weeks to go")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    if let goal = profile.goal_time_s, goal > 0 {
-                        VStack(alignment: .trailing, spacing: 1) {
-                            Text("goal").font(.caption2).foregroundStyle(.tertiary)
-                            Text(Self.hms(goal)).font(.headline.monospacedDigit())
+                    HStack(alignment: .lastTextBaseline, spacing: 8) {
+                        Text("\(days)")
+                            .font(.system(size: 56, weight: .black, design: .rounded))
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("days to go").font(.subheadline.weight(.semibold))
+                            Text("\(days / 7) weeks").font(.caption).opacity(0.85)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 3) {
+                            if let goal = profile.goal_time_s, goal > 0 {
+                                Text(Self.hms(goal))
+                                    .font(.title3.weight(.heavy).monospacedDigit())
+                                Text("goal").font(.caption2).opacity(0.85)
+                            }
+                            if let phase = model.planWeeks.first?.phase, !phase.isEmpty {
+                                Text(phase.uppercased())
+                                    .font(.caption2.weight(.bold))
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(Capsule().fill(.white.opacity(0.22)))
+                            }
                         }
                     }
+                    let _ = key // silences unused warning; key guards parse validity
                 }
+                .foregroundStyle(.white)
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 22)
+                        .fill(LinearGradient(colors: [Color.accentColor, .cyan],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .shadow(color: Color.accentColor.opacity(0.35), radius: 12, y: 4)
+                )
+            } else {
+                VStack(spacing: 8) {
+                    Text("🏁").font(.system(size: 34))
+                    Text("Set your race").font(.headline)
+                    Text("Name, date, and a goal time — the plan and countdown build around it.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 22)
+                        .strokeBorder(Color.accentColor.opacity(0.5),
+                                      style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+                        .background(RoundedRectangle(cornerRadius: 22).fill(Color(.systemBackground)))
+                )
             }
-            .cardStyle()
-        } else {
-            HStack {
-                Text("No race set — add one in your profile and the plan gets a target.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .cardStyle()
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: equivalent race times
@@ -233,5 +266,97 @@ struct PlanView: View {
         return t >= 3600
             ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
             : String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+
+// MARK: - Race editor (lives in Plan, not the athlete profile)
+
+struct RaceSheet: View {
+    let profile: AthleteProfile?
+    var onSave: (AthleteProfile) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+    @State private var date: Date
+    @State private var goal: String
+
+    init(profile: AthleteProfile?, onSave: @escaping (AthleteProfile) -> Void) {
+        self.profile = profile
+        self.onSave = onSave
+        _name = State(initialValue: profile?.race_name ?? "")
+        let parsed = (profile?.race_date).flatMap {
+            $0.isEmpty ? nil : RunRecord.pbDateFormatter.date(from: $0)
+        }
+        _date = State(initialValue: parsed ?? Date().addingTimeInterval(120 * 86400))
+        _goal = State(initialValue: Self.formatGoal(profile?.goal_time_s))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Race") {
+                    TextField("Race name", text: $name)
+                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                    TextField("Goal time (e.g. 3:59 or 3:59:30)", text: $goal)
+                        .keyboardType(.numbersAndPunctuation)
+                }
+                if !(profile?.race_name ?? "").isEmpty {
+                    Section {
+                        Button("Remove race", role: .destructive) {
+                            onSave(merged(name: "", dateStr: "", goalS: 0))
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Your race")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(merged(name: name,
+                                      dateStr: date.localDayKey + "T00:00:00.000Z",
+                                      goalS: Self.parseGoal(goal)))
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    /// Race fields change; everything else passes through untouched.
+    private func merged(name: String, dateStr: String, goalS: Double) -> AthleteProfile {
+        AthleteProfile(
+            id: profile?.id,
+            race_name: name,
+            race_date: dateStr,
+            goal_time_s: goalS,
+            methodology: profile?.methodology?.isEmpty == false ? profile?.methodology : "hybrid_vdot_8020",
+            days_per_week: profile?.days_per_week ?? 4,
+            long_run_day: profile?.long_run_day ?? "Sunday",
+            injured: profile?.injured ?? false,
+            injury_note: profile?.injury_note ?? "",
+            return_to_run_date: profile?.return_to_run_date ?? "",
+            hr_max: profile?.hr_max ?? 0
+        )
+    }
+
+    private static func parseGoal(_ s: String) -> Double {
+        let parts = s.split(separator: ":").compactMap { Double($0) }
+        switch parts.count {
+        case 2: return parts[0] * 3600 + parts[1] * 60
+        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        default: return 0
+        }
+    }
+
+    private static func formatGoal(_ s: Double?) -> String {
+        guard let s, s > 0 else { return "" }
+        let t = Int(s)
+        return String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
     }
 }

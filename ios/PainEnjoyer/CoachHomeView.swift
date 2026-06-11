@@ -15,7 +15,7 @@ struct CoachHomeView: View {
                 VStack(spacing: 16) {
                     heroCard
                     latestActivityCard
-                    weekStrip
+                    monthStatsCard
                     if !model.status.isEmpty {
                         Text(model.status)
                             .font(.footnote)
@@ -108,54 +108,6 @@ struct CoachHomeView: View {
         .padding(.horizontal)
     }
 
-    // MARK: this week at a glance
-
-    private var weekDays: [Date] {
-        var cal = Calendar.current
-        cal.firstWeekday = 1 // fixed Sunday→Saturday week (Ben's preference)
-        let start = cal.dateInterval(of: .weekOfYear, for: .now)?.start ?? .now
-        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-    }
-
-    private var weekStrip: some View {
-        HStack(spacing: 6) {
-            ForEach(weekDays, id: \.self) { day in
-                let key = day.localDayKey
-                let plan = model.plannedByDay[key]?.first
-                let ran = !(model.runsByDay[key]?.isEmpty ?? true)
-                VStack(spacing: 4) {
-                    Text(day.formatted(.dateTime.weekday(.narrow)))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Group {
-                        if key == model.raceDayKey {
-                            Text("🏁").font(.system(size: 13))
-                        } else if ran {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.accentColor)
-                        } else if let plan {
-                            Text(plan.isRest ? "–" : plan.type)
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(plan.isRest ? Color.secondary : plan.statusColor)
-                        } else {
-                            Text("·").font(.system(size: 12)).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .frame(height: 16)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Calendar.current.isDateInToday(day)
-                              ? Color.accentColor.opacity(0.14) : Color(.systemBackground))
-                )
-            }
-        }
-        .padding(.horizontal)
-    }
-
     // MARK: latest activity (the thing you did most recently)
 
     @ViewBuilder
@@ -189,14 +141,65 @@ struct CoachHomeView: View {
                         if let hr = run.avg_hr, hr > 0 {
                             Label("\(Int(hr)) bpm", systemImage: "heart")
                         }
+                        if let v = run.effortVDOT {
+                            Label(String(format: "%.1f", v), systemImage: "bolt")
+                        }
                     }
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    RouteMapView(run: run, height: 150)
+                    if let n = run.notes, !n.isEmpty {
+                        Label(n, systemImage: "text.bubble")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
                 }
             }
             .buttonStyle(.plain)
             .cardStyle()
             .padding(.horizontal)
+        }
+    }
+
+    // MARK: 30-day personal stats
+
+    private var monthStatsCard: some View {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now)!
+        let recent = model.runs.filter { $0.startDate >= cutoff }
+        let km = recent.reduce(0) { $0 + $1.distanceKm }
+        let seconds = recent.reduce(0) { $0 + $1.duration_s }
+        let pace: String = km > 0 ? {
+            let spk = seconds / km
+            return String(format: "%d:%02d /km", Int(spk) / 60, Int(spk) % 60)
+        }() : "–"
+        let hours = seconds / 3600
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("LAST 30 DAYS")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                statTile(String(format: "%.1f", km), "kilometres", "point.topleft.down.curvedto.point.bottomright.up")
+                statTile("\(recent.count)", "runs", "figure.run")
+                statTile(String(format: "%.1f h", hours), "on feet", "stopwatch")
+                statTile(pace, "avg pace", "speedometer")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
+        .padding(.horizontal)
+    }
+
+    private func statTile(_ value: String, _ label: String, _ icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.title3.weight(.heavy).monospacedDigit())
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
     }
 }

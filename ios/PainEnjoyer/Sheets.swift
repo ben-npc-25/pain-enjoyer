@@ -328,10 +328,6 @@ struct ProfileSheet: View {
     var onSave: (AthleteProfile) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    @State private var raceName: String
-    @State private var hasRace: Bool
-    @State private var raceDate: Date
-    @State private var goalTime: String
     @State private var daysPerWeek: Int
     @State private var longRunDay: String
     @State private var injured: Bool
@@ -346,12 +342,7 @@ struct ProfileSheet: View {
     init(existing: AthleteProfile?, onSave: @escaping (AthleteProfile) -> Void) {
         self.existing = existing
         self.onSave = onSave
-        let parsedRace = Self.parsePBDate(existing?.race_date)
         let parsedReturn = Self.parsePBDate(existing?.return_to_run_date)
-        _raceName = State(initialValue: existing?.race_name ?? "")
-        _hasRace = State(initialValue: parsedRace != nil)
-        _raceDate = State(initialValue: parsedRace ?? Date().addingTimeInterval(180 * 86400))
-        _goalTime = State(initialValue: Self.formatGoal(existing?.goal_time_s))
         _daysPerWeek = State(initialValue: Int(existing?.days_per_week ?? 4))
         _longRunDay = State(initialValue: (existing?.long_run_day).flatMap {
             Self.weekdays.contains($0) ? $0 : nil } ?? "Sunday")
@@ -365,14 +356,9 @@ struct ProfileSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Race goal") {
-                    Toggle("Training for a race", isOn: $hasRace)
-                    if hasRace {
-                        TextField("Race name", text: $raceName)
-                        DatePicker("Race date", selection: $raceDate, displayedComponents: .date)
-                        TextField("Goal time (e.g. 3:59 or 3:59:30)", text: $goalTime)
-                            .keyboardType(.numbersAndPunctuation)
-                    }
+                Section {
+                    Text("Your race lives in the Plan tab now — this is about you.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Training constraints") {
                     Stepper("Days per week: \(daysPerWeek)", value: $daysPerWeek, in: 1...7)
@@ -416,9 +402,10 @@ struct ProfileSheet: View {
         // must be able to CLEAR a field (e.g. injury healed, race cancelled).
         AthleteProfile(
             id: existing?.id,
-            race_name: hasRace ? raceName : "",
-            race_date: hasRace ? Self.pbDay(raceDate) : "",
-            goal_time_s: hasRace ? Self.parseGoal(goalTime) : 0,
+            // race fields are edited in the Plan tab — pass through untouched
+            race_name: existing?.race_name ?? "",
+            race_date: existing?.race_date ?? "",
+            goal_time_s: existing?.goal_time_s ?? 0,
             methodology: existing?.methodology?.isEmpty == false
                 ? existing?.methodology : "hybrid_vdot_8020",
             days_per_week: Double(daysPerWeek),
@@ -438,21 +425,6 @@ struct ProfileSheet: View {
     }
 
     private static func pbDay(_ d: Date) -> String { d.localDayKey + "T00:00:00.000Z" }
-
-    private static func parseGoal(_ s: String) -> Double {
-        let parts = s.split(separator: ":").compactMap { Double($0) }
-        switch parts.count {
-        case 2: return parts[0] * 3600 + parts[1] * 60          // H:MM
-        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2] // H:MM:SS
-        default: return 0
-        }
-    }
-
-    private static func formatGoal(_ s: Double?) -> String {
-        guard let s, s > 0 else { return "" }
-        let t = Int(s)
-        return String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
-    }
 }
 
 // MARK: - M2: engine detail (what the coach sees)

@@ -1,6 +1,65 @@
 import SwiftUI
+import MapKit
+import CoreLocation
 
 // M6 design pass: bright, high-contrast, readable.
+
+/// GPS route map for a run — compact (home card) or interactive (detail).
+/// Fetches the HKWorkoutRoute itself; collapses to nothing (or `emptyText`)
+/// when the source app wrote no route.
+struct RouteMapView: View {
+    let run: RunRecord
+    var height: CGFloat = 170
+    var interactive: Bool = false
+    var emptyText: String? = nil
+
+    @State private var route: [CLLocationCoordinate2D] = []
+    @State private var loaded = false
+
+    var body: some View {
+        Group {
+            if route.count > 1 {
+                Map {
+                    MapPolyline(coordinates: route)
+                        .stroke(Color.accentColor,
+                                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    if let first = route.first {
+                        Annotation("", coordinate: first) { endpoint(.green) }
+                    }
+                    if let last = route.last {
+                        Annotation("", coordinate: last) { endpoint(.red) }
+                    }
+                }
+                .frame(height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .allowsHitTesting(interactive)
+            } else if loaded {
+                if let emptyText {
+                    HStack {
+                        Image(systemName: "map")
+                        Text(emptyText).font(.subheadline)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                // no emptyText → collapse quietly (home card)
+            } else if interactive {
+                HStack { ProgressView(); Text("Loading route…")
+                        .font(.subheadline).foregroundStyle(.secondary) }
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .task(id: run.id) {
+            route = await HealthKitService.shared.fetchRoute(workoutUUID: run.healthkit_uuid ?? "")
+            loaded = true
+        }
+    }
+
+    private func endpoint(_ color: Color) -> some View {
+        Circle().fill(color).frame(width: 11, height: 11)
+            .overlay(Circle().stroke(.white, lineWidth: 2))
+    }
+}
 
 /// Renders coach/LLM prose properly. SwiftUI's Text only parses Markdown in
 /// string LITERALS — a String variable shows `**bold**` as raw asterisks,
