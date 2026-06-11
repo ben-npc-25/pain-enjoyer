@@ -1,0 +1,28 @@
+# XcodeGen spec — generates PainEnjoyer.xcodeproj on a Mac:
+#   brew install xcodegen && cd ios && xcodegen
+# (.xcodeproj is gitignored; this file is the source of truth.)
+name: PainEnjoyer
+options:
+  bundleIdPrefix: com.benng
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  PainEnjoyer:
+    type: application
+    platform: iOS
+    sources: [PainEnjoyer]
+    entitlements:
+      path: PainEnjoyer/PainEnjoyer.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        # background-delivery entitlement comes in M1
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSHealthShareUsageDescription: >-
+          Pain Enjoyer reads your runs and recovery metrics from Health to
+          coach your marathon training.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_STYLE: Automatic
+        # Set your personal team in Xcode → Signing & Capabilities on first open.
+        PRODUCT_BUNDLE_IDENTIFIER: com.benng.painenjoyer

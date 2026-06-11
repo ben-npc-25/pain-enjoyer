@@ -1,0 +1,14 @@
+# secrets & local state
+server/.env
+server/pb_data/
+*.pem
+
+# macOS / Xcode
+.DS_Store
+ios/PainEnjoyer.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# misc
+node_modules/
