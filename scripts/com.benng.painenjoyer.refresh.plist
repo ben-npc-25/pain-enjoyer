@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Weekly app re-sign (free Apple account, 7-day profiles). Twice a week so
+     one missed run (phone away, Mac asleep) never strands the app.
+     Install:  cp scripts/com.benng.painenjoyer.refresh.plist ~/Library/LaunchAgents/
+               launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benng.painenjoyer.refresh.plist -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.benng.painenjoyer.refresh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ben.ng/Documents/github/pain-enjoyer/scripts/refresh-app.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>0</integer>
+            <key>Hour</key><integer>21</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>21</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/ben.ng/Library/Logs/pain-enjoyer-refresh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ben.ng/Library/Logs/pain-enjoyer-refresh.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
