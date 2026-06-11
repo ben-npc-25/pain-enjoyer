@@ -125,6 +125,7 @@ struct DayDetailSheet: View {
 struct ChatView: View {
     @ObservedObject var model: AppModel
     @State private var draft = ""
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -148,12 +149,17 @@ struct ChatView: View {
                             withAnimation { proxy.scrollTo(last, anchor: .bottom) }
                         }
                     }
+                    // escape hatch: drag or tap the conversation to drop the
+                    // keyboard (it covers the tab bar while up)
+                    .scrollDismissesKeyboard(.interactively)
+                    .onTapGesture { inputFocused = false }
                 }
                 Divider()
                 HStack(spacing: 8) {
                     TextField("Tell your coach anything…", text: $draft, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...4)
+                        .focused($inputFocused)
                     Button {
                         let text = draft
                         draft = ""
