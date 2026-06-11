@@ -128,15 +128,27 @@ final class AppModel: ObservableObject {
             status = status.isEmpty ? "Loading…" : status
             let pb = try await client()
             _ = try? await pb.ping() // M5: opens feed the engagement score
-            runs = try await pb.listRuns()
-            coachMessage = try? await pb.latestCoachMessage()
-            engine = try? await pb.engineState()
-            if let p = try? await pb.listPlanned() { planned = p }
-            if let m = try? await pb.listMessages() { messages = m }
-            if let r = try? await pb.listRecoveryFull() { recovery = r }
-            if let w = try? await pb.listPlanWeeks() { planWeeks = w }
+
+            // independent fetches run concurrently — one round-trip of latency
+            // instead of seven (the Pi is far away through the tunnel)
+            async let runsReq = pb.listRuns()
+            async let msgReq = pb.latestCoachMessage()
+            async let engineReq = pb.engineState()
+            async let plannedReq = pb.listPlanned()
+            async let messagesReq = pb.listMessages()
+            async let recoveryReq = pb.listRecoveryFull()
+            async let weeksReq = pb.listPlanWeeks()
+            async let profileReq = pb.getProfile()
+
+            runs = try await runsReq
+            coachMessage = try? await msgReq
+            engine = try? await engineReq
+            if let p = try? await plannedReq { planned = p }
+            if let m = try? await messagesReq { messages = m }
+            if let r = try? await recoveryReq { recovery = r }
+            if let w = try? await weeksReq { planWeeks = w }
             do {
-                profile = try await pb.getProfile() // nil = no row → onboarding
+                profile = try await profileReq // nil = no row → onboarding
                 profileLoaded = true
             } catch { /* unreachable/odd response — don't trigger onboarding */ }
             saveCache()

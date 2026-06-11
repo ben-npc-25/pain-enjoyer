@@ -14,8 +14,9 @@ struct CoachHomeView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     heroCard
+                    coachTipCard
                     latestActivityCard
-                    monthStatsCard
+                    statsCard
                     if !model.status.isEmpty {
                         Text(model.status)
                             .font(.footnote)
@@ -160,12 +161,58 @@ struct CoachHomeView: View {
         }
     }
 
-    // MARK: 30-day personal stats
+    // MARK: coach's tip for today (latest morning message)
 
-    private var monthStatsCard: some View {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now)!
+    @ViewBuilder
+    private var coachTipCard: some View {
+        if let tip = model.messages.last(where: { $0.kind == "daily" && !$0.isAthlete })
+            ?? model.coachMessage {
+            Button { model.openChat() } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("COACH'S TIP", systemImage: "figure.run.circle.fill")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color.accentColor)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.bold()).foregroundStyle(.tertiary)
+                    }
+                    CoachProse(text: tip.content, font: .subheadline)
+                        .lineLimit(5)
+                }
+            }
+            .buttonStyle(.plain)
+            .cardStyle()
+            .padding(.horizontal)
+        }
+    }
+
+    // MARK: personal stats — week / month / year, vs the previous period
+
+    private enum StatsPeriod: String, CaseIterable, Identifiable {
+        case week = "Week", month = "Month", year = "Year"
+        var id: String { rawValue }
+        var days: Int {
+            switch self {
+            case .week: return 7
+            case .month: return 30
+            case .year: return 365
+            }
+        }
+    }
+
+    @State private var statsPeriod: StatsPeriod = .month
+
+    private var statsCard: some View {
+        let cal = Calendar.current
+        let now = Date.now
+        let cutoff = cal.date(byAdding: .day, value: -statsPeriod.days, to: now)!
+        let prevCutoff = cal.date(byAdding: .day, value: -2 * statsPeriod.days, to: now)!
         let recent = model.runs.filter { $0.startDate >= cutoff }
+        let previous = model.runs.filter { $0.startDate >= prevCutoff && $0.startDate < cutoff }
+
         let km = recent.reduce(0) { $0 + $1.distanceKm }
+        let prevKm = previous.reduce(0) { $0 + $1.distanceKm }
         let seconds = recent.reduce(0) { $0 + $1.duration_s }
         let pace: String = km > 0 ? {
             let spk = seconds / km
@@ -174,19 +221,46 @@ struct CoachHomeView: View {
         let hours = seconds / 3600
 
         return VStack(alignment: .leading, spacing: 12) {
-            Text("LAST 30 DAYS")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("YOUR NUMBERS")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: $statsPeriod) {
+                    ForEach(StatsPeriod.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 200)
+            }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                 statTile(String(format: "%.1f", km), "kilometres", "point.topleft.down.curvedto.point.bottomright.up")
                 statTile("\(recent.count)", "runs", "figure.run")
                 statTile(String(format: "%.1f h", hours), "on feet", "stopwatch")
                 statTile(pace, "avg pace", "speedometer")
             }
+            if prevKm > 0 || km > 0 {
+                comparisonLine(km: km, prevKm: prevKm)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardStyle()
         .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func comparisonLine(km: Double, prevKm: Double) -> some View {
+        let label = "previous \(statsPeriod.rawValue.lowercased())"
+        if prevKm == 0 {
+            Label(String(format: "%.1f km vs nothing the %@", km, label),
+                  systemImage: "arrow.up.right")
+                .font(.caption).foregroundStyle(.green)
+        } else {
+            let delta = (km - prevKm) / prevKm * 100
+            Label(String(format: "%+.0f%% vs %@ (%.1f km)", delta, label, prevKm),
+                  systemImage: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
+                .font(.caption)
+                .foregroundStyle(delta >= 0 ? .green : .orange)
+        }
     }
 
     private func statTile(_ value: String, _ label: String, _ icon: String) -> some View {
