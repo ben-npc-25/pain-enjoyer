@@ -261,12 +261,17 @@ function generateWeek(app, llm, persona, engine, startDate) {
   const phase = phaseFor(weeksToRace);
   const capKm = weeklyCapKm(state, profile);
 
-  const raw = llm.generate(
-    "weekly",
-    persona,
-    buildPrompt(engine.forLLM(state), profile, weekDates, capKm, phase, weeksToRace)
-  );
-  const plan = sanitizePlan(parsePlanJSON(raw), weekDates, capKm, profile);
+  const prompt = buildPrompt(engine.forLLM(state), profile, weekDates, capKm, phase, weeksToRace);
+  let parsed;
+  try {
+    parsed = parsePlanJSON(llm.generate("weekly", persona, prompt));
+  } catch (err) {
+    // A JSON-less response is a failed response, not a rail violation —
+    // one retry (free-tier Gemini flakes under load), then give up loudly.
+    console.log("plan JSON unusable, retrying once:", String(err));
+    parsed = parsePlanJSON(llm.generate("weekly", persona, prompt));
+  }
+  const plan = sanitizePlan(parsed, weekDates, capKm, profile);
 
   // attach code-computed pace targets (LLM never chose these)
   const zonesSec = state.vdot.available ? state.vdot.zones_sec : null;

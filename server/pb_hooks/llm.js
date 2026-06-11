@@ -28,7 +28,13 @@ function geminiCall(model, key, persona, prompt) {
     body: JSON.stringify({
       system_instruction: { parts: [{ text: persona }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 1024 },
+      generationConfig: {
+        // 2.5-flash is a thinking model: thoughts consume output tokens, and
+        // a 7-day JSON plan at 1024 came back truncated/JSON-less. Thinking
+        // off + roomy cap = reliable structured output on the free tier.
+        maxOutputTokens: 4096,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     }),
     timeout: 120,
   });

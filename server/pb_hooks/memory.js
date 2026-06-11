@@ -81,8 +81,13 @@ function distill(app, llm) {
     "\nConversation from the last 48 hours:\n" + convo +
     "\nReturn the JSON now.";
 
-  const raw = llm.generate("distill", DISTILL_SYSTEM, prompt);
-  const parsed = parseJSONLoose(raw);
+  let parsed;
+  try {
+    parsed = parseJSONLoose(llm.generate("distill", DISTILL_SYSTEM, prompt));
+  } catch (err) {
+    console.log("distill JSON unusable, retrying once:", String(err));
+    parsed = parseJSONLoose(llm.generate("distill", DISTILL_SYSTEM, prompt));
+  }
   const facts = Array.isArray(parsed.facts) ? parsed.facts.slice(0, 15) : [];
 
   const byId = {};
