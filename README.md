@@ -16,8 +16,8 @@ iPhone (SwiftUI + HealthKit) ──HTTPS (Cloudflare Tunnel)──► Raspberry 
 
 | Path | What |
 |---|---|
-| `server/` | Everything that runs on the Pi: setup script, PocketBase migrations + hooks |
-| `scripts/` | `test-e2e.sh` (simulated phone), `diag.sh`, `cleanup-test-data.sh`, tunnel setup |
+| `server/` | Everything that runs on the Pi: setup script, PocketBase migrations + hooks (incl. `engine.js`, the M2 deterministic engine) |
+| `scripts/` | `test-e2e.sh` (simulated phone), `test-engine-local.sh` (M2 engine math on a throwaway PB), `test-engine-live.sh` (M2 exit test, read-only), `deploy-server.sh`, `diag.sh`, `cleanup-test-data.sh`, tunnel setup |
 | `ios/` | SwiftUI app (XcodeGen project — needs a Mac to build) |
 
 ## Quickstart (M0)
@@ -63,6 +63,30 @@ grant HealthKit access. The app then:
 
 > Free Apple account: the install expires every **7 days** — re-run from Xcode weekly.
 > (Documented as risk #1 in PLAN.md; $99/yr removes it.)
+
+## M2 — the deterministic engine
+
+Code computes, the LLM judges (PLAN.md §1). `server/pb_hooks/engine.js` derives,
+from real history only:
+
+- **VDOT + pace zones** (Daniels–Gilbert; best effort in 90 d; E/M/T/I/R paces)
+- **ACWR** (7-day vs 28-day distance load; flags spike / detraining / no-base)
+- **Recovery score 0–100** (today's HRV / resting HR / sleep vs personal 60-day median)
+- **80/20 check** (share of running time at easy HR over 28 d)
+- **🟢🟡🔴 traffic light** (worst severity wins; injured-flag in the profile pins it 🔴)
+
+`GET /api/coach/engine` (auth) returns the full state; its `for_llm` projection
+(strings only — see gotcha below) rides along in every coach prompt and is
+visible in-app via the traffic-light card. The app's **person icon** opens the
+athlete profile (race goal, constraints, **injury status**, HRmax) — shown
+automatically on first launch; the app also pushes daily HRV/RHR/sleep/VO₂max
+into `recovery_daily` on every sync (60-day backfill on the first one).
+
+```bash
+./scripts/test-engine-local.sh   # engine math vs hand-computed fixtures (throwaway PB, no Pi)
+./scripts/deploy-server.sh       # hooks+migrations → Pi → /opt → restart → health
+BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test (read-only)
+```
 
 ## Provider flip (dev → real season)
 

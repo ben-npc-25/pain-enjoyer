@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# test-engine-local.sh — M2 engine smoke test on a THROWAWAY local PocketBase.
+# No Pi, no phone, no LLM key needed (the /api/coach/engine endpoint is pure
+# deterministic code). Seeds synthetic history with hand-computed expectations
+# and asserts the engine's math.
+#
+# Usage: ./scripts/test-engine-local.sh
+# Requires: curl, python3. Downloads a pocketbase binary on first run.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$HERE/.."
+PB_VERSION="${PB_VERSION:-0.28.4}"
+CACHE="$HERE/.cache"
+PORT=8099
+BASE="http://127.0.0.1:$PORT"
+
+# ── 1. pocketbase binary ────────────────────────────────────────────────
+case "$(uname -sm)" in
+  "Darwin arm64") PB_ARCH="darwin_arm64" ;;
+  "Darwin x86_64") PB_ARCH="darwin_amd64" ;;
+  "Linux aarch64") PB_ARCH="linux_arm64" ;;
+  "Linux x86_64") PB_ARCH="linux_amd64" ;;
+  *) echo "✗ unsupported platform: $(uname -sm)"; exit 1 ;;
+esac
+PB_BIN="$CACHE/pocketbase-$PB_VERSION"
+if [[ ! -x "$PB_BIN" ]]; then
+  echo "· downloading pocketbase $PB_VERSION ($PB_ARCH)…"
+  mkdir -p "$CACHE"
+  curl -fsSL -o "$CACHE/pb.zip" \
+    "https://github.com/pocketbase/pocketbase/releases/download/v$PB_VERSION/pocketbase_${PB_VERSION}_${PB_ARCH}.zip"
+  (cd "$CACHE" && unzip -oq pb.zip pocketbase && mv pocketbase "pocketbase-$PB_VERSION" && rm pb.zip)
+fi
+
+# ── 2. throwaway instance with the repo's hooks + migrations ────────────
+WORK="$(mktemp -d /tmp/pb-engine-test.XXXXXX)"
+cleanup() { kill "$PB_PID" 2>/dev/null || true; rm -rf "$WORK"; }
+trap cleanup EXIT
+
+SU_EMAIL="smoke@test.local"
+SU_PASS="smoketest12345"
+"$PB_BIN" --dir "$WORK/pb_data" --migrationsDir "$REPO/server/pb_migrations" \
+  superuser upsert "$SU_EMAIL" "$SU_PASS" >/dev/null
+
+"$PB_BIN" serve --dir "$WORK/pb_data" \
+  --hooksDir "$REPO/server/pb_hooks" \
+  --migrationsDir "$REPO/server/pb_migrations" \
+  --http "127.0.0.1:$PORT" >"$WORK/pb.log" 2>&1 &
+PB_PID=$!
+
+for i in $(seq 1 50); do
+  curl -fsS "$BASE/api/health" >/dev/null 2>&1 && break
+  [[ $i == 50 ]] && { echo "✗ pocketbase didn't start"; cat "$WORK/pb.log"; exit 1; }
+  sleep 0.2
+done
+echo "· pocketbase up (pid $PB_PID)"
+
+TOKEN=$(curl -fsS -X POST "$BASE/api/collections/_superusers/auth-with-password" \
+  -H 'content-type: application/json' \
+  -d "{\"identity\":\"$SU_EMAIL\",\"password\":\"$SU_PASS\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+post() { # post <collection> <json>
+  curl -fsS -X POST "$BASE/api/collections/$1/records" \
+    -H 'content-type: application/json' -H "Authorization: $TOKEN" \
+    -d "$2" >/dev/null
+}
+
+# ── 3. seed: profile + 8 runs + 8 recovery days ─────────────────────────
+# Dates are relative to TODAY so window logic (7/28/90 d) is really exercised.
+day() { python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=$1)).strftime('%Y-%m-%d'))"; }
+
+echo "· seeding synthetic athlete…"
+post athlete_profile "{\"race_name\":\"Test Marathon\",\"race_date\":\"2027-01-24T00:00:00.000Z\",
+  \"days_per_week\":4,\"injured\":true,\"injury_note\":\"ankle\",
+  \"return_to_run_date\":\"$(day -34)T00:00:00.000Z\",\"hr_max\":185}"
+
+# runs: (days_ago, distance_m, duration_s, avg_hr)
+# d15 13120/4060 is THE quality effort → VDOT 39.4, threshold 5:09 min/km.
+# 28-day window (d<28): d12..d26 → chronic 46.33 km → 11.6 km/wk; acute (d<7) = 0.
+RUNS="
+12 5050 1850 142
+14 6330 2280 139
+15 13120 4060 168
+22 7120 2560 141
+26 14710 5430 144
+33 13230 4920 138
+40 7880 2900 146
+47 10120 3650 140
+"
+while read -r d m s hr; do
+  [[ -z "$d" ]] && continue
+  post runs "{\"date\":\"$(day "$d")T07:30:00.000Z\",\"distance_m\":$m,\"duration_s\":$s,
+    \"avg_hr\":$hr,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"smoke-$d\"}"
+done <<< "$RUNS"
+
+# recovery: today is depressed (HRV 45 vs ~61, RHR 54 vs 50, sleep 6.0 vs 7.45)
+# → hand-computed score: 100 − 34.16 (HRV) − 24 (RHR) − 11.4 (sleep) ≈ 30
+REC="
+7 62 50 7.5
+6 60 51 7.2
+5 64 49 7.8
+4 58 50 7.4
+3 61 52 7.6
+2 63 50 7.3
+1 59 49 7.7
+0 45 54 6.0
+"
+while read -r d hrv rhr slp; do
+  [[ -z "$d" ]] && continue
+  post recovery_daily "{\"date\":\"$(day "$d")T00:00:00.000Z\",\"hrv_sdnn_ms\":$hrv,
+    \"resting_hr\":$rhr,\"sleep_hours\":$slp}"
+done <<< "$REC"
+
+# ── 4. hit the engine & assert ──────────────────────────────────────────
+echo "· querying /api/coach/engine…"
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" > "$WORK/engine.json"
+
+python3 - "$WORK/engine.json" <<'PYEOF'
+import json, sys
+
+s = json.load(open(sys.argv[1]))
+fails = []
+def expect(label, got, want):
+    ok = got == want
+    print(("  ✓" if ok else "  ✗") + f" {label}: {got!r}" + ("" if ok else f"  (expected {want!r})"))
+    if not ok: fails.append(label)
+
+# VDOT (Daniels-Gilbert on 13.12 km / 4060 s, hand-computed 39.38 → 39.4)
+expect("vdot.value", s["vdot"]["value"], 39.4)
+expect("zones.threshold", s["vdot"]["zones"]["threshold"], "5:09 min/km")
+expect("zones.easy", s["vdot"]["zones"]["easy"], "6:48–5:55 min/km")
+expect("vdot source distance", s["vdot"]["source_run"]["distance_km"], 13.12)
+
+# ACWR: 46.33 km in 28d → 11.6 km/wk chronic; 0 km in 7d → detraining
+expect("acwr.state", s["acwr"]["state"], "detraining")
+expect("acwr.acute_week_km", s["acwr"]["acute_week_km"], 0)
+expect("acwr.chronic_weekly_km", s["acwr"]["chronic_weekly_km"], 11.6)
+
+# Recovery: 100 − 34.16 − 24 − 11.4 = 30.44 → 30, "poor"
+expect("recovery.score", s["recovery"]["score"], 30)
+expect("recovery.band", s["recovery"]["band"], "poor")
+
+# 80/20: easy time 6690/16180 s → 41%
+expect("intensity.pct_easy_time", s["intensity"]["pct_easy_time"], 41)
+
+# Traffic light: injured(red) + detraining(yellow) + recovery(red) + intensity(yellow)
+expect("traffic_light.light", s["traffic_light"]["light"], "red")
+expect("n reasons", len(s["traffic_light"]["reasons"]), 4)
+assert_injured = any("INJURED" in r for r in s["traffic_light"]["reasons"])
+expect("injury reason present", assert_injured, True)
+
+# LLM projection: strings only (gotcha #4 — no raw decimals reach the LLM)
+all_strings = all(isinstance(v, str) for v in s["for_llm"].values())
+expect("for_llm all strings", all_strings, True)
+
+print()
+if fails:
+    print(f"✗ ENGINE SMOKE TEST FAILED ({len(fails)}): {', '.join(fails)}")
+    sys.exit(1)
+print("✔ engine smoke test passed — every number matched the hand computation")
+PYEOF

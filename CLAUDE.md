@@ -7,17 +7,45 @@ Ben; he's technical and cost-conscious (target ≈ $0).
 ## Status (2026-06-11)
 
 - **M0 done & verified**: backend live, advice flows end-to-end through the public URL.
-- **M1 code written, NEVER COMPILED** (was authored on a Windows machine):
-  calendar UI, anchored HealthKit sync + background delivery, manual entry,
-  HealthKit field audit. **First task on the Mac:** `cd ios && xcodegen`
-  (required — new files + new `healthkit.background-delivery` entitlement),
-  build, fix whatever the compiler finds, run on Ben's iPhone.
-- **M1 exit tests**: ① calendar shows 180-day history → ② run the audit (ECG
-  icon) and read what fields Runkeeper actually writes (decides M2 sourcing) →
-  ③ record a real run WITHOUT opening the app; it must appear on the server.
-- **M2 next**: deterministic engine (VDOT from real efforts, ACWR, recovery
-  score, 🟢🟡🔴 traffic light) + onboarding (race goal). LLM never computes
-  numbers — code computes, LLM judges (PLAN.md §1).
+- **M1 built & deployed (2026-06-11)**: compiled clean (zero fixes needed),
+  signed and installed on Ben's iPhone via `devicectl`, launches. Signing: free
+  personal team `4YC3X253S5` ("ben Ng"), pinned as `DEVELOPMENT_TEAM` in
+  `ios/project.yml` so xcodegen regens keep it (team ID = cert's **OU**, not
+  the parenthetical in the cert name). Xcode-managed profile + install expire
+  **2026-06-18** (7-day free account) — re-deploy weekly.
+- **M1 closed 2026-06-11**: ① calendar ✓ ② field audit ✓ ③ background sync
+  **waived by Ben (injured, not running)** — the observer + background
+  delivery code is registered and compiles, but has never been observed
+  end-to-end. To verify without running: add a manual *Running* workout in
+  Apple Health (Browse → Activity → Workouts → Add Data) with the app closed;
+  it must reach the server (source "Health"); then delete it from Health and
+  run `./scripts/cleanup-test-data.sh`. Re-verify at return-to-run regardless
+  — the weekly re-sign resets background delivery anyway.
+- **Audit verdict (settles M2 sourcing)**: Runkeeper is the sole HealthKit
+  source (15/15 runs), writes distance + HR on every run, elevation on none,
+  all outdoor. → M2 computes VDOT/ACWR/80-20 from distance/duration/avg-HR;
+  `elevation_gain_m` stays null from sync (manual entry covers it); recovery
+  metrics (HRV/RHR/sleep/VO₂max) come from Watch/iPhone passive recording, not
+  Runkeeper — verify they exist in Health when building the recovery score.
+- **Ben is injured (as of 2026-06-11, return date unknown)** — no runs until
+  further notice; last run in Health is 2026-05-27. Consequences: no fresh
+  workouts will land (background sync unobservable in the wild), and ACWR's
+  zero-acute / stale-history case is the *normal* state for now, not an edge
+  case. M2 onboarding should ask about injury status and return-to-run
+  timeline instead of assuming an active race block.
+- **M2 code complete (2026-06-11), deploy pending one SSH key**: engine
+  (`server/pb_hooks/engine.js`: VDOT/zones/ACWR/recovery/80-20/🟢🟡🔴) +
+  `GET /api/coach/engine` + engine facts in every coach prompt; iOS onboarding
+  (person icon: race, constraints, injured flag, HRmax), traffic-light card,
+  recovery sync (60-d backfill → rolling 7-d upsert). Engine math verified
+  locally: `scripts/test-engine-local.sh` = 14/14 vs hand-computed fixtures.
+  iOS build compiled clean + installed on the phone. **Blocked**: this Mac's
+  key isn't on the Pi (`ssh-copy-id ben@192.168.1.236` — mDNS for
+  `suisei.local` doesn't resolve here; that LAN IP is the Pi). Then:
+  `./scripts/deploy-server.sh ben@192.168.1.236` and the M2 exit test
+  `BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh` (read-only,
+  no cleanup). In-app: onboarding auto-appears (no profile row yet) — set
+  injured=ON.
 
 ## Infrastructure
 

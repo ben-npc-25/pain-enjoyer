@@ -25,5 +25,7 @@ targets:
           coach your marathon training.
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         CODE_SIGN_STYLE: Automatic
-        # Set your personal team in Xcode → Signing & Capabilities on first open.
+        # Ben's free personal team "ben Ng" (cert OU, NOT the parenthetical in the
+        # cert name). Team IDs aren't secret; pinning it survives xcodegen regens.
+        DEVELOPMENT_TEAM: 4YC3X253S5
         PRODUCT_BUNDLE_IDENTIFIER: com.benng.painenjoyer

@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showManualEntry = false
     @State private var showAudit = false
+    @State private var showProfile = false
+    @State private var showEngineDetail = false
     @State private var selectedDay: DaySelection?
 
     var body: some View {
@@ -18,6 +20,8 @@ struct ContentView: View {
                     CalendarView(runsByDay: model.runsByDay) { dayRuns in
                         selectedDay = DaySelection(runs: dayRuns)
                     }
+
+                    engineCard
 
                     coachCard
 
@@ -35,6 +39,7 @@ struct ContentView: View {
                     Button { showAudit = true } label: { Image(systemName: "waveform.path.ecg") }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showProfile = true } label: { Image(systemName: "person.crop.circle") }
                     Button { showManualEntry = true } label: { Image(systemName: "plus") }
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
@@ -44,9 +49,20 @@ struct ContentView: View {
                 if serverURL.isEmpty { showSettings = true }
                 else { await model.refresh() }
             }
+            .onChange(of: model.needsOnboarding, initial: true) { _, needs in
+                if needs { showProfile = true } // first run after M2: no profile row yet
+            }
             .sheet(isPresented: $showSettings, onDismiss: {
                 Task { await model.refresh() }
             }) { SettingsSheet() }
+            .sheet(isPresented: $showProfile) {
+                ProfileSheet(existing: model.profile) { p in
+                    Task { await model.saveProfile(p) }
+                }
+            }
+            .sheet(isPresented: $showEngineDetail) {
+                if let eng = model.engine { EngineDetailSheet(engine: eng) }
+            }
             .sheet(isPresented: $showManualEntry) {
                 ManualEntrySheet { date, km, min, hr in
                     Task { await model.addManualRun(date: date, distanceKm: km,
@@ -59,6 +75,38 @@ struct ContentView: View {
                     Task { await model.deleteRun(run) }
                 }
             }
+        }
+    }
+
+    /// M2: traffic light + VDOT at a glance; tap for the full engine state.
+    @ViewBuilder
+    private var engineCard: some View {
+        if let eng = model.engine {
+            Button { showEngineDetail = true } label: {
+                HStack(spacing: 12) {
+                    Text(eng.traffic_light.emoji).font(.system(size: 34))
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(eng.traffic_light.light.capitalized).font(.headline)
+                            if let v = eng.vdot.value {
+                                Text(String(format: "· VDOT %.1f", v))
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(eng.traffic_light.reasons.first ?? "")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.bold()).foregroundStyle(.tertiary)
+                }
+                .padding()
+                .background(RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(.secondarySystemBackground)))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal)
         }
     }
 

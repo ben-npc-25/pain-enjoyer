@@ -11,6 +11,15 @@ final class AppModel: ObservableObject {
     @Published var status: String = ""
     @Published var busy = false
 
+    // M2: deterministic engine state + athlete profile
+    @Published var engine: EngineState?
+    @Published var profile: AthleteProfile?
+    /// True once a profile fetch SUCCEEDED — distinguishes "no profile yet"
+    /// (→ onboarding) from "couldn't reach the server".
+    @Published var profileLoaded = false
+
+    var needsOnboarding: Bool { profileLoaded && profile == nil }
+
     /// Runs grouped by local-day key ("2026-06-11") — what the calendar consumes.
     var runsByDay: [String: [RunRecord]] {
         Dictionary(grouping: runs) { $0.localDayKey }
@@ -61,6 +70,11 @@ final class AppModel: ObservableObject {
             let pb = try await client()
             runs = try await pb.listRuns()
             coachMessage = try? await pb.latestCoachMessage()
+            engine = try? await pb.engineState()
+            do {
+                profile = try await pb.getProfile() // nil = no row → onboarding
+                profileLoaded = true
+            } catch { /* unreachable/odd response — don't trigger onboarding */ }
             saveCache()
             if status == "Loading…" || status == "Reading Health…" { status = "" }
         } catch {
@@ -98,6 +112,20 @@ final class AppModel: ObservableObject {
             try await pb.uploadRun(run)
             await refresh(syncHealth: false)
             status = "Run added"
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    func saveProfile(_ p: AthleteProfile) async {
+        busy = true; defer { busy = false }
+        do {
+            let pb = try await client()
+            try await pb.saveProfile(p)
+            profile = try await pb.getProfile()
+            profileLoaded = true
+            engine = try? await pb.engineState() // injury flag changes the light
+            status = "Profile saved"
         } catch {
             status = "✗ \(error.localizedDescription)"
         }

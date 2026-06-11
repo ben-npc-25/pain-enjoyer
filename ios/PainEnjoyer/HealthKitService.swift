@@ -123,6 +123,127 @@ final class HealthKitService {
         }
     }
 
+    // MARK: M2 — daily recovery metrics (HRV / RHR / sleep / VO2max)
+
+    /// One row per local day for the last `days` days, ready for
+    /// `recovery_daily`. Days with no metrics at all are dropped.
+    func fetchRecoveryDaily(days: Int) async -> [RecoveryPayload] {
+        async let hrv = dailyAverage(.heartRateVariabilitySDNN,
+                                     unit: .secondUnit(with: .milli), days: days)
+        async let rhr = dailyAverage(.restingHeartRate,
+                                     unit: HKUnit.count().unitDivided(by: .minute()), days: days)
+        async let sleep = dailySleepHours(days: days)
+        async let vo2 = dailyLatestVo2Max(days: days)
+        let (hrvByDay, rhrByDay, sleepByDay, vo2ByDay) = await (hrv, rhr, sleep, vo2)
+
+        var dayKeys = Set(hrvByDay.keys)
+        dayKeys.formUnion(rhrByDay.keys)
+        dayKeys.formUnion(sleepByDay.keys)
+        dayKeys.formUnion(vo2ByDay.keys)
+
+        return dayKeys.sorted().map { day in
+            RecoveryPayload(
+                date: day + "T00:00:00.000Z",
+                hrv_sdnn_ms: hrvByDay[day],
+                resting_hr: rhrByDay[day],
+                sleep_hours: sleepByDay[day].map { ($0 * 10).rounded() / 10 },
+                vo2max: vo2ByDay[day]
+            )
+        }.filter(\.hasAnyMetric)
+    }
+
+    /// Per-local-day discrete average of a quantity type.
+    private func dailyAverage(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
+                              days: Int) async -> [String: Double] {
+        let cal = Calendar.current
+        let now = Date()
+        let start = cal.startOfDay(for: cal.date(byAdding: .day, value: -(days - 1), to: now)!)
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: [])
+        let query = HKStatisticsCollectionQuery(
+            quantityType: HKQuantityType(id),
+            quantitySamplePredicate: predicate,
+            options: .discreteAverage,
+            anchorDate: cal.startOfDay(for: now),
+            intervalComponents: DateComponents(day: 1)
+        )
+        return await withCheckedContinuation { cont in
+            query.initialResultsHandler = { _, collection, _ in
+                var out: [String: Double] = [:]
+                collection?.enumerateStatistics(from: start, to: now) { stat, _ in
+                    if let v = stat.averageQuantity()?.doubleValue(for: unit) {
+                        out[stat.startDate.localDayKey] = (v * 10).rounded() / 10
+                    }
+                }
+                cont.resume(returning: out)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Sleep hours per local day, attributed to the WAKE day (sample end).
+    /// Overlapping samples from multiple sources are union-merged so a watch
+    /// and phone both logging the same night don't double it.
+    private func dailySleepHours(days: Int) async -> [String: Double] {
+        let now = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: now)!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: [])
+        let samples: [HKCategorySample] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: HKCategoryType(.sleepAnalysis),
+                                  predicate: predicate, limit: HKObjectQueryNoLimit,
+                                  sortDescriptors: nil) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKCategorySample]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+
+        let asleepValues = Set(HKCategoryValueSleepAnalysis.allAsleepValues.map(\.rawValue))
+        var intervalsByDay: [String: [(start: Date, end: Date)]] = [:]
+        for s in samples where asleepValues.contains(s.value) {
+            intervalsByDay[s.endDate.localDayKey, default: []].append((s.startDate, s.endDate))
+        }
+
+        var out: [String: Double] = [:]
+        for (day, intervals) in intervalsByDay {
+            var merged: [(start: Date, end: Date)] = []
+            for iv in intervals.sorted(by: { $0.start < $1.start }) {
+                if let last = merged.last, iv.start <= last.end {
+                    if iv.end > last.end { merged[merged.count - 1].end = iv.end }
+                } else {
+                    merged.append(iv)
+                }
+            }
+            let seconds = merged.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
+            if seconds > 0 { out[day] = seconds / 3600 }
+        }
+        return out
+    }
+
+    /// Latest VO2max reading per local day.
+    private func dailyLatestVo2Max(days: Int) async -> [String: Double] {
+        let now = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: now)!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: [])
+        let samples: [HKQuantitySample] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: HKQuantityType(.vo2Max),
+                                  predicate: predicate, limit: HKObjectQueryNoLimit,
+                                  sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate,
+                                                                     ascending: true)]) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKQuantitySample]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+
+        let unit = HKUnit.literUnit(with: .milli)
+            .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        var out: [String: Double] = [:]
+        for s in samples { // ascending → last write per day wins
+            out[s.startDate.localDayKey] = (s.quantity.doubleValue(for: unit) * 10).rounded() / 10
+        }
+        return out
+    }
+
     // MARK: Field audit (M1 deliverable — what does Runkeeper actually write?)
 
     /// Human-readable report of the last `limit` workouts: which fields each

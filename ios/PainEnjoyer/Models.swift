@@ -65,6 +65,63 @@ struct CoachMessage: Codable, Identifiable {
     var created: String?
 }
 
+// MARK: - M2: recovery, profile, engine
+
+/// One day of recovery metrics pushed to `recovery_daily`.
+struct RecoveryPayload: Codable {
+    var date: String // "yyyy-MM-ddT00:00:00.000Z" (local day label)
+    var hrv_sdnn_ms: Double?
+    var resting_hr: Double?
+    var sleep_hours: Double?
+    var vo2max: Double?
+
+    var hasAnyMetric: Bool {
+        hrv_sdnn_ms != nil || resting_hr != nil || sleep_hours != nil || vo2max != nil
+    }
+}
+
+struct RecoveryRecord: Codable, Identifiable {
+    var id: String
+    var date: String
+    var localDayKey: String {
+        (RunRecord.pbDateFormatter.date(from: date) ?? .distantPast).localDayKey
+    }
+}
+
+/// The singleton athlete profile row (PB returns "" for unset dates/strings).
+struct AthleteProfile: Codable {
+    var id: String?
+    var race_name: String?
+    var race_date: String?
+    var goal_time_s: Double?
+    var methodology: String?
+    var days_per_week: Double?
+    var long_run_day: String?
+    var injured: Bool?
+    var injury_note: String?
+    var return_to_run_date: String?
+    var hr_max: Double?
+}
+
+/// Subset of GET /api/coach/engine the app renders. `for_llm` is the
+/// pre-formatted string projection — schema-stable by design, so the UI
+/// leans on it instead of chasing the engine's raw shape.
+struct EngineState: Codable {
+    struct TrafficLight: Codable {
+        var light: String
+        var emoji: String
+        var reasons: [String]
+    }
+    struct Vdot: Codable {
+        var available: Bool
+        var value: Double?
+        var zones: [String: String]?
+    }
+    var traffic_light: TrafficLight
+    var vdot: Vdot
+    var for_llm: [String: String]?
+}
+
 struct AdviceResponse: Codable {
     var advice: String
     var provider: String

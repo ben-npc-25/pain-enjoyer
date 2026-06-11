@@ -12,3 +12,4 @@ DerivedData/
 
 # misc
 node_modules/
+scripts/.cache/

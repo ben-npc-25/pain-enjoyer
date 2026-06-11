@@ -63,17 +63,27 @@ function saveCoachMessage(app, kind, content, provider) {
   app.save(rec);
 }
 
-function buildDailyPrompt(profile, facts) {
+function buildDailyPrompt(profile, facts, engineFacts) {
   // Volatile content (date, metrics) lives here — NOT in the persona prefix.
-  return (
+  // engineFacts is engine.forLLM() output: every value pre-formatted (M2).
+  let p =
     "Today is " +
     new Date().toISOString().slice(0, 10) +
     ".\n\nAthlete profile: " +
     JSON.stringify(profile || { note: "no profile set up yet" }) +
     "\n\nMost recent run — computed facts (use ONLY these numbers): " +
-    JSON.stringify(facts) +
-    "\n\nGive the athlete short, specific coaching feedback on this run."
-  );
+    JSON.stringify(facts);
+  if (engineFacts) {
+    p +=
+      "\n\nTraining engine — deterministic state computed from the full " +
+      "history (quote these verbatim; never recompute): " +
+      JSON.stringify(engineFacts) +
+      "\n\nLead with what the traffic light means for today, then anything " +
+      "specific worth saying about the recent run or trends.";
+  } else {
+    p += "\n\nGive the athlete short, specific coaching feedback on this run.";
+  }
+  return p;
 }
 
 module.exports = {

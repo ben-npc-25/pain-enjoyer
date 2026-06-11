@@ -22,6 +22,7 @@ routerAdd(
       const llm = require(`${__hooks}/llm.js`);
       const persona = require(`${__hooks}/persona.js`).PERSONA;
       const coach = require(`${__hooks}/coach.js`);
+      const engine = require(`${__hooks}/engine.js`);
 
       const facts = coach.latestRunFacts(e.app);
       if (!facts) {
@@ -30,16 +31,19 @@ routerAdd(
         });
       }
 
+      // M2: deterministic engine state rides along with every advice call.
+      const engineFacts = engine.forLLM(engine.computeEngineState(e.app));
       const advice = llm.generate(
         "daily",
         persona,
-        coach.buildDailyPrompt(coach.profileFacts(e.app), facts)
+        coach.buildDailyPrompt(coach.profileFacts(e.app), facts, engineFacts)
       );
       coach.saveCoachMessage(e.app, "daily", advice, llm.provider());
       return e.json(200, {
         advice: advice,
         provider: llm.provider(),
         facts: facts, // returned so the app can show what the coach saw
+        engine: engineFacts,
       });
     } catch (err) {
       console.log("advise failed:", String(err), err && err.stack ? String(err.stack) : "");
@@ -62,17 +66,20 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
     const llm = require(`${__hooks}/llm.js`);
     const persona = require(`${__hooks}/persona.js`).PERSONA;
     const coach = require(`${__hooks}/coach.js`);
+    const engine = require(`${__hooks}/engine.js`);
 
     const facts = coach.latestRunFacts($app);
     if (!facts) return; // nothing synced yet — stay quiet
 
+    const engineFacts = engine.forLLM(engine.computeEngineState($app));
     const advice = llm.generate(
       "daily",
       persona,
-      coach.buildDailyPrompt(coach.profileFacts($app), facts) +
+      coach.buildDailyPrompt(coach.profileFacts($app), facts, engineFacts) +
         "\nThis is your proactive morning check-in to the athlete. If the most " +
-        "recent run is more than 3 days old, gently ask how training is going " +
-        "instead of analyzing a stale run."
+        "recent run is more than 3 days old, don't analyze a stale run — speak " +
+        "to where the athlete is right now (the traffic light and athlete " +
+        "status tell you)."
     );
     coach.saveCoachMessage($app, "daily", advice, llm.provider());
     console.log("morning-coach: message stored");
@@ -80,6 +87,28 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
     console.log("morning-coach failed:", String(err));
   }
 });
+
+// ── GET /api/coach/engine ──────────────────────────────────────────────
+// M2: the deterministic engine state (VDOT, zones, ACWR, recovery, 80/20,
+// traffic light). Auth required. The app renders this; the LLM only ever
+// sees the forLLM() projection embedded in prompts.
+
+routerAdd(
+  "GET",
+  "/api/coach/engine",
+  (e) => {
+    try {
+      const engine = require(`${__hooks}/engine.js`);
+      const state = engine.computeEngineState(e.app);
+      state.for_llm = engine.forLLM(state);
+      return e.json(200, state);
+    } catch (err) {
+      console.log("engine failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
 
 // ── GET /api/coach/health ──────────────────────────────────────────────
 // Unauthenticated liveness probe so the tunnel + service can be checked

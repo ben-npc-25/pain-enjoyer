@@ -104,6 +104,48 @@ final class PocketBaseClient {
     func deleteRun(id: String) async throws {
         try await request("/api/collections/runs/records/\(id)", method: "DELETE")
     }
+
+    // MARK: M2 — engine, profile, recovery
+
+    func engineState() async throws -> EngineState {
+        let data = try await request("/api/coach/engine", method: "GET")
+        return try JSONDecoder().decode(EngineState.self, from: data)
+    }
+
+    /// The singleton profile row, or nil if onboarding hasn't happened yet.
+    func getProfile() async throws -> AthleteProfile? {
+        let data = try await request("/api/collections/athlete_profile/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "1"),
+                                             .init(name: "sort", value: "-created")])
+        return try JSONDecoder().decode(ListResponse<AthleteProfile>.self, from: data).items.first
+    }
+
+    /// Create-or-update keyed on the record id (single row).
+    func saveProfile(_ p: AthleteProfile) async throws {
+        if let id = p.id, !id.isEmpty {
+            try await request("/api/collections/athlete_profile/records/\(id)",
+                              method: "PATCH", body: p)
+        } else {
+            try await request("/api/collections/athlete_profile/records", body: p)
+        }
+    }
+
+    /// Existing recovery rows (id + date) so sync can upsert by day.
+    func listRecovery(perPage: Int = 100) async throws -> [RecoveryRecord] {
+        let data = try await request("/api/collections/recovery_daily/records", method: "GET",
+                                     query: [.init(name: "perPage", value: String(perPage)),
+                                             .init(name: "sort", value: "-date"),
+                                             .init(name: "fields", value: "id,date")])
+        return try JSONDecoder().decode(ListResponse<RecoveryRecord>.self, from: data).items
+    }
+
+    func createRecovery(_ r: RecoveryPayload) async throws {
+        try await request("/api/collections/recovery_daily/records", body: r)
+    }
+
+    func updateRecovery(id: String, _ r: RecoveryPayload) async throws {
+        try await request("/api/collections/recovery_daily/records/\(id)", method: "PATCH", body: r)
+    }
 }
 
 /// Type-erasing wrapper so `request` can take any Encodable.
