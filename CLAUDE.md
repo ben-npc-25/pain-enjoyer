@@ -33,29 +33,29 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   zero-acute / stale-history case is the *normal* state for now, not an edge
   case. M2 onboarding should ask about injury status and return-to-run
   timeline instead of assuming an active race block.
-- **M2 code complete (2026-06-11), deploy pending one SSH key**: engine
-  (`server/pb_hooks/engine.js`: VDOT/zones/ACWR/recovery/80-20/🟢🟡🔴) +
-  `GET /api/coach/engine` + engine facts in every coach prompt; iOS onboarding
-  (person icon: race, constraints, injured flag, HRmax), traffic-light card,
-  recovery sync (60-d backfill → rolling 7-d upsert). Engine math verified
-  locally: `scripts/test-engine-local.sh` = 14/14 vs hand-computed fixtures.
-  iOS build compiled clean + installed on the phone. **Blocked**: this Mac's
-  key isn't on the Pi (`ssh-copy-id ben@192.168.1.236` — mDNS for
-  `suisei.local` doesn't resolve here; that LAN IP is the Pi). Then:
-  `./scripts/deploy-server.sh ben@192.168.1.236` and the M2 exit test
-  `BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh` (read-only,
-  no cleanup). In-app: onboarding auto-appears (no profile row yet) — set
-  injured=ON.
+- **M2 done & verified (2026-06-11)**: engine deployed; exit test passed on
+  real history — `VDOT 47.7` anchored to the **2026-03-28 marathon (42.2 km @
+  4:42 min/km)**, 🟡 light (ACWR 0.00 detraining + 0% easy + stale zones), 77
+  runs/180 d, recovery sync live (score 74, HRV present, **no sleep data**).
+  Engine math also fixture-verified: `scripts/test-engine-local.sh` (14/14).
+  Ben onboarded: race = Tokyo legacy half 2026-10-08; injured flag was left
+  OFF (flip in profile → engine pins 🔴). `hr_max` unset → 80/20 uses an
+  estimate (180) that classifies everything hard; set real HRmax to calibrate.
+  Re-verify any time: `ssh ben@192.168.1.236 'cd ~/pain-enjoyer &&
+  BASE_URL=http://127.0.0.1:8090 ./scripts/test-engine-live.sh'` (read-only).
+- **M3 next**: weekly plan generation (LLM weekly tier), plan-vs-actual
+  overlay on the calendar, daily check-in. Engine facts already ride in every
+  prompt; plan generation should consume them + the race goal.
 
 ## Infrastructure
 
 | What | Where |
 |---|---|
-| Pi | `ssh ben@suisei.local` (user ben, passwordless sudo, arm64). New Mac? `ssh-copy-id` first. |
+| Pi | `ssh ben@suisei.local` — or `ben@192.168.1.236` (mDNS doesn't resolve on some networks). User ben, passwordless sudo, arm64. sshd is **publickey-only** → `ssh-copy-id` can't bootstrap; paste new Macs' keys into `~/.ssh/authorized_keys` from an existing session. |
 | Live backend | `/opt/pain-enjoyer` — PocketBase + systemd service `pain-enjoyer`, bound 127.0.0.1:8090 |
 | Repo copy on Pi | `~/pain-enjoyer` (deploy = scp there → `sudo cp` into /opt → `systemctl restart pain-enjoyer`) |
 | Public URL | `https://coach.bennpc.uk` (alias `run.bennpc.uk`) — probe `/api/coach/health` |
-| Secrets | `server/.env` — gitignored, NOT on GitHub. Canonical copy on the Pi (`~/pain-enjoyer/server/.env` and `/opt/pain-enjoyer/.env`). |
+| Secrets | `server/.env` — gitignored, NOT on GitHub. **Canonical = `/opt/pain-enjoyer/.env` (root)**; `~/pain-enjoyer/server/.env` is a convenience copy for the test scripts (went missing once — restored 2026-06-11 via `sudo install -o ben -m 600`). |
 | LLM | Gemini free tier now; flip = `LLM_PROVIDER=claude` + key in `.env`, restart (see README) |
 
 ## ⚠ Things that bite (details in README)
