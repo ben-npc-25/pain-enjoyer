@@ -109,9 +109,10 @@ struct CoachHomeView: View {
     // MARK: this week at a glance
 
     private var weekDays: [Date] {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: .now)
-        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: today) }
+        var cal = Calendar.current
+        cal.firstWeekday = 1 // fixed Sunday→Saturday week (Ben's preference)
+        let start = cal.dateInterval(of: .weekOfYear, for: .now)?.start ?? .now
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
     }
 
     private var weekStrip: some View {
@@ -171,6 +172,19 @@ struct CoachHomeView: View {
                 Text("No advice yet — pull to refresh, then ask.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
+            // M5: one-tap check-ins — each lands in chat and feeds engagement
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    quickReply("✅ Did my session")
+                    quickReply("😮‍💨 Today was tough")
+                    quickReply("🤕 Pain today")
+                    Button { model.openChat() } label: {
+                        Text("💬 More…").font(.footnote)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                }
+            }
             HStack(spacing: 10) {
                 Button {
                     Task { await model.askCoach() }
@@ -194,5 +208,14 @@ struct CoachHomeView: View {
         .padding()
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
         .padding(.horizontal)
+    }
+
+    private func quickReply(_ text: String) -> some View {
+        Button { model.quickCheckin(text) } label: {
+            Text(text).font(.footnote)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .disabled(model.chatBusy)
     }
 }

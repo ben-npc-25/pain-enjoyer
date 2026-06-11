@@ -274,5 +274,21 @@ curl -fsS -X POST "$BASE/api/coach/chat" -H "Authorization: $TOKEN" \
   -H 'content-type: application/json' -d '{"message":"thanks coach"}' |
   python3 -c 'import sys,json; assert "reply" in json.load(sys.stdin); print("  ✓ chat still flows with memory block injected")'
 
+# ── 10. M5: engagement ping + deterministic score ────────────────────────
+echo "· M5: engagement…"
+curl -fsS -X POST "$BASE/api/coach/ping" -H "Authorization: $TOKEN" >/dev/null
+curl -fsS -X POST "$BASE/api/coach/ping" -H "Authorization: $TOKEN" |
+  python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["opens"]==2, r; print("  ✓ ping upserts (opens=2 after two pings)")'
+# Deterministic from seeds: no coach "daily" msgs → response null; yesterday's
+# E was skipped → completion 0/1; opens 1 day of 14 → ≈0.07; score (0+0.07)/2.
+curl -fsS "$BASE/api/coach/engagement" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+assert r["response_rate"] is None, r
+assert r["completion_rate"] == 0, r
+assert abs(r["score"] - 0.04) < 0.011, r
+print("  ✓ score components match hand computation (score %.2f)" % r["score"])'
+
 echo
-echo "✔ engine + M3 plan/chat + M4 memory smoke tests all passed"
+echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement — all smoke tests passed"

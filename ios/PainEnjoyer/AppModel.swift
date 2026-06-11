@@ -28,6 +28,22 @@ final class AppModel: ObservableObject {
     @Published var memory: [MemoryFact] = []
     @Published var recovery: [RecoveryFull] = []
 
+    // M5: tab routing + chat prefill (quick check-ins, "ask about workout")
+    enum AppTab: Hashable { case coach, calendar, trends, chat }
+    @Published var selectedTab: AppTab = .coach
+    @Published var chatPrefill = ""
+
+    func openChat(prefill: String = "") {
+        chatPrefill = prefill
+        selectedTab = .chat
+    }
+
+    /// One-tap check-in: jump to chat and send immediately.
+    func quickCheckin(_ text: String) {
+        selectedTab = .chat
+        Task { await sendChat(text) }
+    }
+
     func haptic(_ success: Bool = true) {
         UINotificationFeedbackGenerator().notificationOccurred(success ? .success : .error)
     }
@@ -92,6 +108,7 @@ final class AppModel: ObservableObject {
             }
             status = status.isEmpty ? "Loading…" : status
             let pb = try await client()
+            _ = try? await pb.ping() // M5: opens feed the engagement score
             runs = try await pb.listRuns()
             coachMessage = try? await pb.latestCoachMessage()
             engine = try? await pb.engineState()

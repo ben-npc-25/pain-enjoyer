@@ -333,10 +333,37 @@ function reconcile(app) {
   return { done: done, skipped: skipped };
 }
 
+// M5: red light → the coach pulls today's planned workout (deterministic;
+// the morning message explains it). Returns what was pulled, or null.
+function pullTodayIfRed(app, state) {
+  if (!state.traffic_light || state.traffic_light.light !== "red") return null;
+  const day = isoDay(new Date());
+  const wos = app.findRecordsByFilter(
+    "planned_workouts",
+    "date >= '" + day + " 00:00:00.000Z' && date <= '" + day + " 23:59:59.000Z' && status = 'planned'",
+    "", 5, 0
+  );
+  for (const wo of wos) {
+    const t = wo.getString("type");
+    if (t === "rest") continue;
+    const km = Math.round((wo.getFloat("distance_m") / 1000) * 10) / 10;
+    wo.set("status", "modified");
+    wo.set("type", "rest");
+    wo.set("distance_m", 0);
+    wo.set("description",
+      "⛔ Coach pulled this (red light): was " + t + " " + km + " km — " +
+      wo.getString("description"));
+    app.save(wo);
+    return { was_type: t, was_km: km };
+  }
+  return null;
+}
+
 module.exports = {
   generateWeek: generateWeek,
   reconcile: reconcile,
   nextMonday: nextMonday,
+  pullTodayIfRed: pullTodayIfRed,
   // exposed for tests
   _sanitizePlan: sanitizePlan,
   _weeklyCapKm: weeklyCapKm,

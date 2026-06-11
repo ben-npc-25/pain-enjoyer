@@ -90,22 +90,92 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
     const facts = coach.latestRunFacts($app);
     if (!facts) return; // nothing synced yet — stay quiet
 
-    const engineFacts = engine.forLLM(engine.computeEngineState($app));
+    const state = engine.computeEngineState($app);
+
+    // M5: red light → pull today's planned workout (code decides, the
+    // message below explains).
+    const pulled = plan.pullTodayIfRed($app, state);
+    if (pulled) console.log("pulled today's " + pulled.was_type + " " + pulled.was_km + " km (red light)");
+
+    // M5: adaptive proactivity — engagement score decides today's cadence.
+    const engagement = require(`${__hooks}/engagement.js`);
+    const eng = engagement.cadence($app);
+    const since = coach.daysSinceLastDaily($app);
+    let send =
+      eng.level === "daily" ||
+      since === null ||
+      (eng.level === "every_2_3_days" && since >= 2) ||
+      (eng.level === "weekly_digest" && since >= 7);
+    if (pulled || eng.changed) send = true; // never silently pull or downshift
+    if (!send) {
+      console.log("morning-coach: quiet day (cadence " + eng.level + ", score " + eng.score + ")");
+      return;
+    }
+
+    let notes =
+      "\nThis is your proactive morning check-in to the athlete. If the most " +
+      "recent run is more than 3 days old, don't analyze a stale run — speak " +
+      "to where the athlete is right now (the traffic light and athlete " +
+      "status tell you).";
+    if (pulled) {
+      notes +=
+        "\nIMPORTANT: you just PULLED today's planned " + pulled.was_type + " " +
+        pulled.was_km + " km because the light is red. Lead with that — " +
+        "explain why plainly and give the recovery alternative.";
+    }
+    if (eng.changed) {
+      notes +=
+        "\nYour check-in cadence just changed to '" + eng.level + "' (engagement " +
+        eng.score + "). Acknowledge the new rhythm briefly — make clear you're " +
+        "still here and they can ping you anytime. Never ghost.";
+    }
+
+    const engineFacts = engine.forLLM(state);
     const advice = llm.generate(
       "daily",
       persona,
-      coach.buildDailyPrompt(coach.profileFacts($app), facts, engineFacts) +
-        "\nThis is your proactive morning check-in to the athlete. If the most " +
-        "recent run is more than 3 days old, don't analyze a stale run — speak " +
-        "to where the athlete is right now (the traffic light and athlete " +
-        "status tell you)."
+      coach.buildDailyPrompt(coach.profileFacts($app), facts, engineFacts) + notes
     );
     coach.saveCoachMessage($app, "daily", advice, llm.provider());
-    console.log("morning-coach: message stored");
+    console.log("morning-coach: message stored (cadence " + eng.level + ")");
   } catch (err) {
     console.log("morning-coach failed:", String(err));
   }
 });
+
+// ── POST /api/coach/ping · GET /api/coach/engagement ──────────────────
+// M5: the app reports opens (the one signal only the client knows); the
+// engagement endpoint exposes the score/cadence for transparency + tests.
+
+routerAdd(
+  "POST",
+  "/api/coach/ping",
+  (e) => {
+    try {
+      const engagement = require(`${__hooks}/engagement.js`);
+      return e.json(200, engagement.ping(e.app));
+    } catch (err) {
+      console.log("ping failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
+routerAdd(
+  "GET",
+  "/api/coach/engagement",
+  (e) => {
+    try {
+      const engagement = require(`${__hooks}/engagement.js`);
+      return e.json(200, engagement.score(e.app));
+    } catch (err) {
+      console.log("engagement failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
 
 // ── GET /api/coach/engine ──────────────────────────────────────────────
 // M2: the deterministic engine state (VDOT, zones, ACWR, recovery, 80/20,

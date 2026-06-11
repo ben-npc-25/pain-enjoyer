@@ -181,6 +181,12 @@ final class PocketBaseClient {
                           body: Notes(notes: notes))
     }
 
+    /// M5: app-open ping — feeds the engagement score on the server.
+    @discardableResult
+    func ping() async throws -> Data {
+        try await request("/api/coach/ping")
+    }
+
     // MARK: M4 — memory + recovery series
 
     func listMemory() async throws -> [MemoryFact] {

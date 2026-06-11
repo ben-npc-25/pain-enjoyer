@@ -118,6 +118,16 @@ function buildDailyPrompt(profile, facts, engineFacts) {
   return p;
 }
 
+// M5: days since the coach's last proactive check-in (null = never).
+function daysSinceLastDaily(app) {
+  const msgs = app.findRecordsByFilter(
+    "coach_messages", "kind = 'daily' && role = 'coach'", "-created", 1, 0
+  );
+  if (!msgs.length) return null;
+  const created = new Date(msgs[0].getString("created").replace(" ", "T"));
+  return Math.floor((Date.now() - created.getTime()) / 86400000);
+}
+
 function saveAthleteMessage(app, content) {
   const col = app.findCollectionByNameOrId("coach_messages");
   const rec = new Record(col);
@@ -135,4 +145,5 @@ module.exports = {
   recentMessages,
   buildChatPrompt,
   buildDailyPrompt,
+  daysSinceLastDaily,
 };

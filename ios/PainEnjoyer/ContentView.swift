@@ -10,15 +10,19 @@ struct ContentView: View {
     @State private var showOnboarding = false
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedTab) {
             CoachHomeView(model: model)
                 .tabItem { Label("Coach", systemImage: "figure.run") }
+                .tag(AppModel.AppTab.coach)
             CalendarTabView(model: model)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
+                .tag(AppModel.AppTab.calendar)
             TrendsView(model: model)
                 .tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }
+                .tag(AppModel.AppTab.trends)
             ChatView(model: model)
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tag(AppModel.AppTab.chat)
         }
         .task {
             if serverURL.isEmpty { showFirstRunSettings = true }
@@ -90,6 +94,12 @@ struct CalendarTabView: View {
                     onDelete: { run in Task { await model.deleteRun(run) } },
                     onSaveNotes: { run, notes in
                         Task { await model.saveNotes(for: run, notes: notes) }
+                    },
+                    onAskCoach: { wo in
+                        selectedDay = nil
+                        model.openChat(prefill: String(
+                            format: "About my planned %@ (%.1f km) on %@: ",
+                            wo.typeLabel.lowercased(), wo.distanceKm, wo.localDayKey))
                     }
                 )
             }

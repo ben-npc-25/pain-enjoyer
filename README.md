@@ -97,7 +97,7 @@ BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test 
   repairs whatever the LLM proposes outside them (repairs are logged into the
   week's rationale). The LLM only chooses structure and writes the words.
 - **Plan vs actual**: planned workouts overlay the calendar (type letter;
-  orange planned / green done / red skipped), 🏁 on race day. The morning cron
+  blue planned / green done / red skipped), 🏁 on race day. The morning cron
   reconciles yesterday: run landed → `done`, no run → `skipped`, rest → `done`.
 - **Chat**: two-way thread with the coach — `POST /api/coach/chat`; both sides
   persist in `coach_messages` (role `athlete`/`coach`), and every reply is
@@ -125,6 +125,23 @@ BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test 
   card, this-week strip, **Trends** (Swift Charts: weekly volume, HRV + RHR
   vs baseline, per-run effort VDOT), app icon (regenerate:
   `swift scripts/make-app-icon.swift`), accent color, haptics.
+
+## M5 — adaptive proactivity
+
+- **Engagement score** (deterministic, 14-day window): chat-response rate ×
+  workout completion × app-open rate (`POST /api/coach/ping` from the app;
+  `GET /api/coach/engagement` to inspect). Maps to a cadence: ≥0.55 daily ·
+  ≥0.25 every 2–3 days · else weekly digest. Race ≤14 days away forces daily.
+- **The morning cron now decides whether to speak**: quiet days are logged,
+  never silent ghosting — a cadence change always gets one message
+  acknowledging the new rhythm.
+- **Red light pulls today's workout**: a planned non-rest day under a 🔴 light
+  is converted to rest (`status: modified`, original preserved in the
+  description) and the morning message must lead with the why. PLAN.md's M4
+  exit test ("HRV tanks → coach pulls a workout"), delivered in M5.
+- **One-tap check-ins** under the coach card (✅ / 😮‍💨 / 🤕) post straight to
+  chat and feed the engagement score; planned workouts grew an "Ask the coach
+  about this" shortcut. Week strip is fixed Sunday→Saturday.
 
 ## Provider flip (dev → real season)
 

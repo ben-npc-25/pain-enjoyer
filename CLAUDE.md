@@ -70,10 +70,21 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   flows with memory injected. iOS built + installed. NO new migration (M4
   uses M0's coach_memory collection). Deploy: `./scripts/deploy-server.sh
   ben@192.168.1.236`.
-- **M5 next (needs Ben running again)**: adaptive proactivity + engagement
-  tracking — original M4 exit test from PLAN.md ("skip 3 check-ins → cadence
-  drops; HRV tanks → coach pulls a workout"). Deliberately deferred: not
-  exercisable while injured.
+- **M5 done & deployed (2026-06-11)**: adaptive proactivity. `engagement.js`
+  (ping/score/cadence: 14-d response+completion+opens → daily /
+  every_2_3_days / weekly_digest, race ≤14 d forces daily, level persisted to
+  profile), morning cron decides whether to speak (quiet days logged; cadence
+  changes always acknowledged), `plan.pullTodayIfRed` converts today's
+  planned non-rest to rest under 🔴 and the message leads with why. iOS:
+  Sun→Sat week strip, one-tap check-ins (✅😮‍💨🤕 → chat), "Ask the coach about
+  this" on planned workouts, app-open ping. Endpoints: POST /api/coach/ping,
+  GET /api/coach/engagement. Verified live (ping + score). NOTE: cron-only
+  behaviors (pull, cadence shifts) verify naturally at 06:00 HKT — pull needs
+  a non-rest workout today + red light (test: injured OFF → plan week →
+  injured ON → next morning).
+- **All PLAN.md milestones (M0–M4 scope) shipped.** Parked: route maps,
+  race-time predictor, taper specialization, Android, multi-user. UI polish
+  is iterative from here.
 
 ## Infrastructure
 

@@ -8,6 +8,7 @@ struct DayDetailSheet: View {
     let planned: [PlannedWorkout]
     let onDelete: (RunRecord) -> Void
     let onSaveNotes: (RunRecord, String) -> Void
+    var onAskCoach: ((PlannedWorkout) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var notesDraft: [String: String] = [:]
 
@@ -38,6 +39,15 @@ struct DayDetailSheet: View {
                                 }
                                 if let d = wo.description, !d.isEmpty {
                                     Text(d).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                if let onAskCoach {
+                                    Button {
+                                        onAskCoach(wo)
+                                    } label: {
+                                        Label("Ask the coach about this", systemImage: "bubble.left")
+                                            .font(.footnote)
+                                    }
+                                    .buttonStyle(.borderless)
                                 }
                             }
                             .padding(.vertical, 2)
@@ -173,6 +183,14 @@ struct ChatView: View {
             }
             .navigationTitle("Coach chat")
             .navigationBarTitleDisplayMode(.inline)
+            // M5: prefilled drafts arrive from quick actions elsewhere
+            .onChange(of: model.chatPrefill, initial: true) { _, prefill in
+                if !prefill.isEmpty {
+                    draft = prefill
+                    model.chatPrefill = ""
+                    inputFocused = true
+                }
+            }
         }
     }
 
