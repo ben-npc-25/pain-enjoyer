@@ -91,6 +91,15 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   the empirical test of whether Runkeeper writes routes), run type chips
   (pace vs zones_sec), Trends "Coach's read" (`POST /api/coach/trends-review`
   → kind weekly_review). Quick check-in buttons removed (Ben: cheap).
+- **Restructure (2026-06-11 evening, Ben's feedback)**: activity-first home
+  (hero notice + latest-activity card; coach card removed — advice lives in
+  chat via ✨ toolbar button), **fresh-slate chat** (UI shows last 24 h only;
+  full history server-side, memory carries context), **blue theme** (accent +
+  icon + wordmark; planned-workout color → orange), audit UI removed, Plan
+  tab status surfaced top + spinner ("add plan not working" = invisible
+  feedback; endpoint verified live 200), Trends = per-chart coach commentary
+  (structured JSON weekly_review via `trends` LLM tier; `engine.trendFacts`)
+  + VO₂max health chart. Quick check-ins removed earlier same day.
 - **All PLAN.md milestones shipped.** Parked still: taper specialization,
   Android, multi-user, auto-fetch race info from the web. UI polish is
   iterative from here.
