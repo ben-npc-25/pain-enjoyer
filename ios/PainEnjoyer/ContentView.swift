@@ -14,6 +14,9 @@ struct ContentView: View {
             CoachHomeView(model: model)
                 .tabItem { Label("Coach", systemImage: "figure.run") }
                 .tag(AppModel.AppTab.coach)
+            PlanView(model: model)
+                .tabItem { Label("Plan", systemImage: "list.clipboard") }
+                .tag(AppModel.AppTab.plan)
             CalendarTabView(model: model)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(AppModel.AppTab.calendar)
@@ -24,6 +27,8 @@ struct ContentView: View {
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                 .tag(AppModel.AppTab.chat)
         }
+        // M6: bright, high-contrast by default (Ben's call — single-user app)
+        .preferredColorScheme(.light)
         .task {
             if serverURL.isEmpty { showFirstRunSettings = true }
             else { await model.refresh() }
@@ -100,7 +105,8 @@ struct CalendarTabView: View {
                         model.openChat(prefill: String(
                             format: "About my planned %@ (%.1f km) on %@: ",
                             wo.typeLabel.lowercased(), wo.distanceKm, wo.localDayKey))
-                    }
+                    },
+                    zones: model.zonesSec
                 )
             }
         }

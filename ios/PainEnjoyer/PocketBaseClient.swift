@@ -181,6 +181,21 @@ final class PocketBaseClient {
                           body: Notes(notes: notes))
     }
 
+    // MARK: M6 — plan weeks + trends review
+
+    func listPlanWeeks() async throws -> [PlanWeek] {
+        let data = try await request("/api/collections/plan_weeks/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "6"),
+                                             .init(name: "sort", value: "-week_idx")])
+        return try JSONDecoder().decode(ListResponse<PlanWeek>.self, from: data).items
+    }
+
+    func trendsReview() async throws -> String {
+        struct R: Decodable { let review: String }
+        let data = try await request("/api/coach/trends-review")
+        return try JSONDecoder().decode(R.self, from: data).review
+    }
+
     /// M5: app-open ping — feeds the engagement score on the server.
     @discardableResult
     func ping() async throws -> Data {

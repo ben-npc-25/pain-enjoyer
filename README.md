@@ -143,6 +143,28 @@ BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test 
   chat and feed the engagement score; planned workouts grew an "Ask the coach
   about this" shortcut. Week strip is fixed Sunday→Saturday.
 
+## M6 — design pass + depth
+
+- **Readable coach prose everywhere**: SwiftUI `Text` only parses Markdown in
+  string *literals* — LLM replies (String variables) showed raw `**asterisks**`.
+  `CoachProse` renders via `AttributedString(markdown:)` with
+  `.inlineOnlyPreservingWhitespace` (keeps line breaks), body-size font, line
+  spacing.
+- **Bright theme**: light color scheme, white cards + soft shadows on a gray
+  canvas, gradient wordmark instead of the plain title, new app icon (GPS
+  route motif — `swift scripts/make-app-icon.swift`).
+- **Plan tab**: race countdown + goal, **equivalent race times** from current
+  VDOT (5K/10K/Half/Marathon — the parked race-time predictor, deterministic),
+  upcoming weeks day-by-day with the coach's rationale, generate button.
+- **Run detail**: tap a run → type chip (auto-classified vs VDOT zones:
+  easy/steady/tempo/speed/long), big stats, **GPS route map** (HKWorkoutRoute →
+  MapKit polyline; empirically answers whether Runkeeper writes routes),
+  notes editor.
+- **Trends: "Coach's read"** — on-demand 2–4 sentence commentary on the charts
+  (`POST /api/coach/trends-review`, stored as kind `weekly_review`).
+- Quick check-in buttons removed (felt cheap); chat + "Ask coach" entry points
+  remain.
+
 ## Provider flip (dev → real season)
 
 In `server/.env`: set `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY=...`, then

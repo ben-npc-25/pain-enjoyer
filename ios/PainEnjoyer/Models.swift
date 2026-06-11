@@ -24,6 +24,7 @@ struct RunRecord: Codable, Identifiable, Hashable {
     var elevation_gain_m: Double?
     var source_app: String?
     var notes: String? // M3: athlete's subjective note, feeds the coach
+    var healthkit_uuid: String? // M6: route lookup for the map
 
     // PB dates look like "2026-06-11 07:30:00.000Z"
     static let pbDateFormatter: DateFormatter = {
@@ -81,6 +82,7 @@ struct PlannedWorkout: Codable, Identifiable, Hashable {
     var target_pace_high_skm: Double?
     var description: String?
     var status: String?
+    var plan_week_id: String?
 
     var startDate: Date { RunRecord.pbDateFormatter.date(from: date) ?? .distantPast }
     var localDayKey: String { String(date.prefix(10)) } // stored at UTC midnight = day label
@@ -142,17 +144,84 @@ struct RecoveryFull: Codable, Identifiable {
     var day: Date { RunRecord.pbDateFormatter.date(from: date) ?? .distantPast }
 }
 
+/// Daniels–Gilbert single-effort VDOT — display-only math (the coaching VDOT
+/// comes from the server engine, never from here).
+func danielsVDOT(distanceM: Double, durationS: Double) -> Double {
+    let t = durationS / 60
+    let v = distanceM / t
+    let vo2 = -4.6 + 0.182258 * v + 0.000104 * v * v
+    let pct = 0.8 + 0.1894393 * exp(-0.012778 * t) + 0.2989558 * exp(-0.1932605 * t)
+    return vo2 / pct
+}
+
+/// Equivalent race time at a given VDOT (bisection — monotonic in time).
+func predictedRaceTime(distanceM: Double, vdot: Double) -> TimeInterval {
+    var lo = 240.0, hi = 21600.0
+    for _ in 0..<48 {
+        let mid = (lo + hi) / 2
+        if danielsVDOT(distanceM: distanceM, durationS: mid) > vdot { lo = mid }
+        else { hi = mid }
+    }
+    return (lo + hi) / 2
+}
+
+/// Display classification of a run, from pace vs the engine's zone targets.
+enum RunClass {
+    case easy, long, steady, tempo, speed, unknown
+
+    var label: String {
+        switch self {
+        case .easy: return "EASY"
+        case .long: return "LONG RUN"
+        case .steady: return "STEADY"
+        case .tempo: return "TEMPO"
+        case .speed: return "SPEED"
+        case .unknown: return "RUN"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .easy: return .green
+        case .long: return .teal
+        case .steady: return .blue
+        case .tempo: return .orange
+        case .speed: return .red
+        case .unknown: return .gray
+        }
+    }
+}
+
 extension RunRecord {
-    /// Daniels–Gilbert single-effort VDOT — display-only trend signal
-    /// (the coaching VDOT comes from the server engine, never from here).
     var effortVDOT: Double? {
         guard distance_m >= 3000, duration_s >= 720 else { return nil }
-        let t = duration_s / 60
-        let v = distance_m / t
-        let vo2 = -4.6 + 0.182258 * v + 0.000104 * v * v
-        let pct = 0.8 + 0.1894393 * exp(-0.012778 * t) + 0.2989558 * exp(-0.1932605 * t)
-        return vo2 / pct
+        return danielsVDOT(distanceM: distance_m, durationS: duration_s)
     }
+
+    /// Heuristic display label: long by distance/duration first, then pace
+    /// vs the engine's zone targets (sec/km).
+    func runClass(zones: [String: Double]?) -> RunClass {
+        guard distance_m > 0, duration_s > 0 else { return .unknown }
+        if distance_m >= 12000 || duration_s >= 4800 { return .long }
+        let secPerKm = duration_s / (distance_m / 1000)
+        guard let z = zones,
+              let interval = z["interval"], let threshold = z["threshold"],
+              let marathon = z["marathon"], let easyHigh = z["easy_high"]
+        else { return .unknown }
+        if secPerKm <= interval * 1.02 { return .speed }
+        if secPerKm <= threshold * 1.03 { return .tempo }
+        if secPerKm <= marathon * 1.03 { return .steady }
+        if secPerKm >= easyHigh * 0.95 { return .easy }
+        return .steady
+    }
+}
+
+/// plan_weeks row — phase + the coach's rationale for the week.
+struct PlanWeek: Codable, Identifiable {
+    var id: String
+    var week_idx: Double?
+    var phase: String?
+    var rationale: String?
 }
 
 extension PlannedWorkout {
@@ -224,6 +293,7 @@ struct EngineState: Codable {
         var available: Bool
         var value: Double?
         var zones: [String: String]?
+        var zones_sec: [String: Double]? // raw sec/km — run classification
     }
     var traffic_light: TrafficLight
     var vdot: Vdot

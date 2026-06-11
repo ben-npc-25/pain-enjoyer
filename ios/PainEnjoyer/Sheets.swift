@@ -9,8 +9,8 @@ struct DayDetailSheet: View {
     let onDelete: (RunRecord) -> Void
     let onSaveNotes: (RunRecord, String) -> Void
     var onAskCoach: ((PlannedWorkout) -> Void)? = nil
+    var zones: [String: Double]? = nil
     @Environment(\.dismiss) private var dismiss
-    @State private var notesDraft: [String: String] = [:]
 
     private var title: String {
         (runs.first?.startDate ?? planned.first?.startDate)?
@@ -58,36 +58,32 @@ struct DayDetailSheet: View {
                 if !runs.isEmpty {
                     Section(planned.isEmpty ? "Runs" : "Actual") {
                         ForEach(runs) { run in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(String(format: "%.2f km", run.distanceKm)).font(.title3.bold())
-                                    Spacer()
-                                    Text(run.source_app ?? "").font(.caption).foregroundStyle(.secondary)
-                                }
-                                HStack(spacing: 16) {
-                                    Label(run.durationString, systemImage: "stopwatch")
-                                    Label(run.paceString, systemImage: "speedometer")
-                                    if let hr = run.avg_hr, hr > 0 {
-                                        Label("\(Int(hr)) bpm", systemImage: "heart")
+                            NavigationLink {
+                                RunDetailView(run: run, zones: zones, onSaveNotes: onSaveNotes)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(String(format: "%.2f km", run.distanceKm)).font(.title3.bold())
+                                        RunTypeChip(type: run.runClass(zones: zones))
+                                        Spacer()
+                                        Text(run.source_app ?? "").font(.caption).foregroundStyle(.secondary)
                                     }
-                                }
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                HStack {
-                                    TextField("How did it feel? (the coach reads this)",
-                                              text: binding(for: run), axis: .vertical)
-                                        .font(.subheadline)
-                                        .lineLimit(1...3)
-                                    if binding(for: run).wrappedValue != (run.notes ?? "") {
-                                        Button("Save") {
-                                            onSaveNotes(run, binding(for: run).wrappedValue)
+                                    HStack(spacing: 16) {
+                                        Label(run.durationString, systemImage: "stopwatch")
+                                        Label(run.paceString, systemImage: "speedometer")
+                                        if let hr = run.avg_hr, hr > 0 {
+                                            Label("\(Int(hr)) bpm", systemImage: "heart")
                                         }
-                                        .font(.caption.bold())
-                                        .buttonStyle(.borderedProminent)
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    if let n = run.notes, !n.isEmpty {
+                                        Label(n, systemImage: "text.bubble")
+                                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                 }
+                                .padding(.vertical, 4)
                             }
-                            .padding(.vertical, 4)
                             .swipeActions {
                                 Button(role: .destructive) { onDelete(run) } label: {
                                     Label("Delete", systemImage: "trash")
@@ -102,13 +98,6 @@ struct DayDetailSheet: View {
             .toolbar { Button("Done") { dismiss() } }
         }
         .presentationDetents([.medium, .large])
-    }
-
-    private func binding(for run: RunRecord) -> Binding<String> {
-        Binding(
-            get: { notesDraft[run.id] ?? run.notes ?? "" },
-            set: { notesDraft[run.id] = $0 }
-        )
     }
 
     @ViewBuilder
@@ -198,8 +187,10 @@ struct ChatView: View {
     private func bubble(_ msg: CoachMessage) -> some View {
         HStack {
             if msg.isAthlete { Spacer(minLength: 40) }
-            Text(msg.content)
-                .font(.subheadline)
+            Group {
+                if msg.isAthlete { Text(msg.content).font(.subheadline) }
+                else { CoachProse(text: msg.content, font: .subheadline) }
+            }
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 14)

@@ -18,9 +18,11 @@ struct TrendsView: View {
                         recoveryChart(\.resting_hr, unit: "bpm", color: .pink)
                     }
                     card("Effort score per run", subtitle: "single-run VDOT, 180 days") { vdotChart }
+                    coachReviewCard
                 }
                 .padding()
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Trends")
             .refreshable { await model.refresh() }
         }
@@ -39,8 +41,7 @@ struct TrendsView: View {
             }
             content()
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+        .cardStyle()
     }
 
     // MARK: weekly volume
@@ -165,6 +166,35 @@ struct TrendsView: View {
             .chartYScale(domain: .automatic(includesZero: false))
             .frame(height: 170)
         }
+    }
+
+    // MARK: coach's read on the charts (M6)
+
+    private var latestReview: CoachMessage? {
+        model.messages.last { $0.kind == "weekly_review" && !$0.isAthlete }
+    }
+
+    private var coachReviewCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Coach's read", systemImage: "figure.run.circle.fill").font(.headline)
+                Spacer()
+                Button {
+                    Task { await model.trendsReview() }
+                } label: {
+                    if model.busy { ProgressView() }
+                    else { Label("Refresh", systemImage: "sparkles").font(.footnote) }
+                }
+                .disabled(model.busy)
+            }
+            if let review = latestReview {
+                CoachProse(text: review.content, font: .subheadline)
+            } else {
+                Text("Tap refresh and the coach will comment on what these charts say.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        .cardStyle()
     }
 
     private func placeholder(_ text: String) -> some View {

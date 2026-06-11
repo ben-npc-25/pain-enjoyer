@@ -1,10 +1,10 @@
-// make-app-icon.swift — renders the app icon (1024×1024 PNG): a glowing
-// traffic light on dark slate. The 🔴🟡🟢 push/pull light IS the brand.
+// make-app-icon.swift — renders the app icon (1024×1024 PNG): a GPS route
+// polyline on a bright coral→amber gradient — running-app coded, matches the
+// in-app route maps.
 //
 //   swift scripts/make-app-icon.swift
 //
 // Writes ios/PainEnjoyer/Assets.xcassets/AppIcon.appiconset/icon.png
-// (committed; re-run only to restyle).
 
 import CoreGraphics
 import ImageIO
@@ -23,36 +23,47 @@ func rgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) -> CGColor {
     CGColor(srgbRed: r, green: g, blue: b, alpha: a)
 }
 
-// background: deep slate vertical gradient
+// bright diagonal gradient: coral → amber
 let bg = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                    colors: [rgb(0.075, 0.085, 0.11), rgb(0.13, 0.15, 0.19)] as CFArray,
+                    colors: [rgb(1.00, 0.36, 0.15), rgb(1.00, 0.70, 0.20)] as CFArray,
                     locations: [0, 1])!
-ctx.drawLinearGradient(bg, start: CGPoint(x: 512, y: 1024),
-                       end: CGPoint(x: 512, y: 0), options: [])
+ctx.drawLinearGradient(bg, start: CGPoint(x: 0, y: 0),
+                       end: CGPoint(x: 1024, y: 1024), options: [])
 
-// housing: a soft pill behind the lights
-let housing = CGRect(x: 330, y: 96, width: 364, height: 832)
-let pill = CGPath(roundedRect: housing, cornerWidth: 182, cornerHeight: 182, transform: nil)
-ctx.addPath(pill)
-ctx.setFillColor(rgb(0.055, 0.06, 0.08, 0.85))
-ctx.fillPath()
-
-// the three lights, glowing
-let lights: [(y: CGFloat, color: CGColor)] = [
-    (756, rgb(1.00, 0.27, 0.23)),  // red on top
-    (512, rgb(1.00, 0.84, 0.04)),
-    (268, rgb(0.19, 0.82, 0.35)),
+// the route: a rounded polyline sweeping bottom-left → top-right
+let pts: [CGPoint] = [
+    CGPoint(x: 200, y: 220),
+    CGPoint(x: 430, y: 330),
+    CGPoint(x: 330, y: 540),
+    CGPoint(x: 620, y: 640),
+    CGPoint(x: 540, y: 800),
+    CGPoint(x: 824, y: 820),
 ]
-for l in lights {
-    ctx.saveGState()
-    ctx.setShadow(offset: .zero, blur: 70, color: l.color.copy(alpha: 0.85))
-    ctx.setFillColor(l.color)
-    ctx.fillEllipse(in: CGRect(x: 512 - 104, y: l.y - 104, width: 208, height: 208))
-    ctx.restoreGState()
-    // specular highlight
-    ctx.setFillColor(rgb(1, 1, 1, 0.28))
-    ctx.fillEllipse(in: CGRect(x: 512 - 58, y: l.y + 18, width: 64, height: 52))
-}
+let path = CGMutablePath()
+path.move(to: pts[0])
+for p in pts.dropFirst() { path.addLine(to: p) }
+
+// soft shadow pass under the route
+ctx.saveGState()
+ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 36, color: rgb(0.55, 0.12, 0.0, 0.45))
+ctx.addPath(path)
+ctx.setStrokeColor(rgb(1, 1, 1))
+ctx.setLineWidth(58)
+ctx.setLineCap(.round)
+ctx.setLineJoin(.round)
+ctx.strokePath()
+ctx.restoreGState()
+
+// start dot (filled) + finish ring
+ctx.setFillColor(rgb(1, 1, 1))
+ctx.fillEllipse(in: CGRect(x: pts[0].x - 56, y: pts[0].y - 56, width: 112, height: 112))
+ctx.setFillColor(rgb(1.00, 0.42, 0.18))
+ctx.fillEllipse(in: CGRect(x: pts[0].x - 26, y: pts[0].y - 26, width: 52, height: 52))
+
+let end = pts.last!
+ctx.setStrokeColor(rgb(1, 1, 1))
+ctx.setLineWidth(34)
+ctx.strokeEllipse(in: CGRect(x: end.x - 62, y: end.y - 62, width: 124, height: 124))
 
 let img = ctx.makeImage()!
 let out = URL(fileURLWithPath: "ios/PainEnjoyer/Assets.xcassets/AppIcon.appiconset/icon.png")

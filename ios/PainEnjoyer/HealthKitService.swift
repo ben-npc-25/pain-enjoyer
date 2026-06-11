@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import CoreLocation
 
 enum HealthKitError: LocalizedError {
     case unavailable
@@ -38,6 +39,8 @@ final class HealthKitService {
             HKQuantityType(.restingHeartRate),
             HKQuantityType(.vo2Max),
             HKCategoryType(.sleepAnalysis),
+            // M6: GPS route for the run-detail map
+            HKSeriesType.workoutRoute(),
         ]
         try await store.requestAuthorization(toShare: [], read: read)
     }
@@ -242,6 +245,46 @@ final class HealthKitService {
             out[s.startDate.localDayKey] = (s.quantity.doubleValue(for: unit) * 10).rounded() / 10
         }
         return out
+    }
+
+    // MARK: M6 — GPS route for a synced run
+
+    /// Route coordinates for the workout with this HealthKit UUID, or empty
+    /// if the source app never wrote one (manual entries never have routes).
+    func fetchRoute(workoutUUID: String) async -> [CLLocationCoordinate2D] {
+        guard let uuid = UUID(uuidString: workoutUUID) else { return [] }
+
+        let workouts: [HKWorkout] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: .workoutType(),
+                                  predicate: HKQuery.predicateForObject(with: uuid),
+                                  limit: 1, sortDescriptors: nil) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKWorkout]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+        guard let workout = workouts.first else { return [] }
+
+        let routes: [HKWorkoutRoute] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: HKSeriesType.workoutRoute(),
+                                  predicate: HKQuery.predicateForObjects(from: workout),
+                                  limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKWorkoutRoute]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+        guard let route = routes.first else { return [] }
+
+        return await withCheckedContinuation { cont in
+            var coords: [CLLocationCoordinate2D] = []
+            let q = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
+                if error != nil { cont.resume(returning: coords); return }
+                coords.append(contentsOf: (locations ?? []).map(\.coordinate))
+                if done { cont.resume(returning: coords) }
+            }
+            store.execute(q)
+        }
     }
 
     // MARK: Field audit (M1 deliverable — what does Runkeeper actually write?)

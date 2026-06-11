@@ -82,9 +82,18 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   behaviors (pull, cadence shifts) verify naturally at 06:00 HKT — pull needs
   a non-rest workout today + red light (test: injured OFF → plan week →
   injured ON → next morning).
-- **All PLAN.md milestones (M0–M4 scope) shipped.** Parked: route maps,
-  race-time predictor, taper specialization, Android, multi-user. UI polish
-  is iterative from here.
+- **M6 done & deployed (2026-06-11)**: design pass + depth. Coach prose was
+  unreadable because SwiftUI Text doesn't parse markdown from String vars →
+  `CoachProse` (AttributedString, inlineOnlyPreservingWhitespace). Light
+  theme (white cards/shadows, gradient wordmark, route-motif icon), **Plan
+  tab** (race countdown + VDOT-equivalent race times — predictor unparked —
+  weeks w/ rationale), **run detail w/ GPS route map** (HKWorkoutRoute; also
+  the empirical test of whether Runkeeper writes routes), run type chips
+  (pace vs zones_sec), Trends "Coach's read" (`POST /api/coach/trends-review`
+  → kind weekly_review). Quick check-in buttons removed (Ben: cheap).
+- **All PLAN.md milestones shipped.** Parked still: taper specialization,
+  Android, multi-user, auto-fetch race info from the web. UI polish is
+  iterative from here.
 
 ## Infrastructure
 

@@ -143,6 +143,42 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
   }
 });
 
+// ── POST /api/coach/trends-review ──────────────────────────────────────
+// M6: on-demand coach commentary for the Trends screen (kind weekly_review).
+
+routerAdd(
+  "POST",
+  "/api/coach/trends-review",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const coach = require(`${__hooks}/coach.js`);
+      const engine = require(`${__hooks}/engine.js`);
+
+      const engineFacts = engine.forLLM(engine.computeEngineState(e.app));
+      const review = llm.generate(
+        "daily",
+        persona,
+        "Today is " + new Date().toISOString().slice(0, 10) + ".\n\n" +
+          "Training engine — deterministic state (quote numbers verbatim, never recompute): " +
+          JSON.stringify(engineFacts) +
+          "\n\nThe athlete is looking at their trend charts (weekly volume, HRV, " +
+          "resting HR, per-run fitness scores). Give 2–4 plain sentences of " +
+          "perspective on the trajectory — volume, recovery, fitness, intensity " +
+          "balance. No greetings, no headings."
+      );
+      coach.saveCoachMessage(e.app, "weekly_review", review, llm.provider());
+      return e.json(200, { review: review, provider: llm.provider() });
+    } catch (err) {
+      console.log("trends-review failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
 // ── POST /api/coach/ping · GET /api/coach/engagement ──────────────────
 // M5: the app reports opens (the one signal only the client knows); the
 // engagement endpoint exposes the score/cadence for transparency + tests.

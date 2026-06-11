@@ -290,5 +290,14 @@ assert r["completion_rate"] == 0, r
 assert abs(r["score"] - 0.04) < 0.011, r
 print("  ✓ score components match hand computation (score %.2f)" % r["score"])'
 
+# ── 11. M6: trends review ────────────────────────────────────────────────
+echo "· M6: trends review…"
+curl -fsS -X POST "$BASE/api/coach/trends-review" -H "Authorization: $TOKEN" |
+  python3 -c 'import sys,json; r=json.load(sys.stdin); assert "Canned coach reply" in r["review"], r; print("  ✓ trends review flows")'
+curl -fsS -G "$BASE/api/collections/coach_messages/records" \
+  --data-urlencode "filter=kind = 'weekly_review'" --data-urlencode "perPage=1" \
+  -H "Authorization: $TOKEN" |
+  python3 -c 'import sys,json; assert json.load(sys.stdin)["totalItems"] >= 1; print("  ✓ stored as weekly_review")'
+
 echo
-echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement — all smoke tests passed"
+echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends — all passed"

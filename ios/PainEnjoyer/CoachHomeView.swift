@@ -24,7 +24,9 @@ struct CoachHomeView: View {
                 }
                 .padding(.vertical)
             }
-            .navigationTitle("Pain Enjoyer")
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .principal) { Wordmark() } }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showMemory = true } label: { Image(systemName: "brain.head.profile") }
@@ -147,7 +149,7 @@ struct CoachHomeView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Calendar.current.isDateInToday(day)
-                              ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground))
+                              ? Color.accentColor.opacity(0.14) : Color(.systemBackground))
                 )
             }
         }
@@ -167,23 +169,10 @@ struct CoachHomeView: View {
                 }
             }
             if let msg = model.coachMessage {
-                Text(msg.content).font(.subheadline)
+                CoachProse(text: msg.content)
             } else {
                 Text("No advice yet — pull to refresh, then ask.")
                     .font(.subheadline).foregroundStyle(.secondary)
-            }
-            // M5: one-tap check-ins — each lands in chat and feeds engagement
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    quickReply("✅ Did my session")
-                    quickReply("😮‍💨 Today was tough")
-                    quickReply("🤕 Pain today")
-                    Button { model.openChat() } label: {
-                        Text("💬 More…").font(.footnote)
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                }
             }
             HStack(spacing: 10) {
                 Button {
@@ -196,26 +185,15 @@ struct CoachHomeView: View {
                 .disabled(model.busy)
 
                 Button {
-                    Task { await model.generatePlan() }
+                    model.openChat()
                 } label: {
-                    Label("Plan week", systemImage: "calendar.badge.plus")
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(model.busy)
             }
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+        .cardStyle()
         .padding(.horizontal)
-    }
-
-    private func quickReply(_ text: String) -> some View {
-        Button { model.quickCheckin(text) } label: {
-            Text(text).font(.footnote)
-        }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .disabled(model.chatBusy)
     }
 }

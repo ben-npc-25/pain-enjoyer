@@ -28,8 +28,27 @@ final class AppModel: ObservableObject {
     @Published var memory: [MemoryFact] = []
     @Published var recovery: [RecoveryFull] = []
 
+    // M6: plan weeks (rationale/phase) for the Plan tab
+    @Published var planWeeks: [PlanWeek] = []
+
+    var zonesSec: [String: Double]? { engine?.vdot.zones_sec }
+
+    func trendsReview() async {
+        busy = true; defer { busy = false }
+        do {
+            status = "Coach is reading your charts…"
+            let pb = try await client()
+            _ = try await pb.trendsReview()
+            messages = (try? await pb.listMessages()) ?? messages
+            status = ""
+            haptic()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
     // M5: tab routing + chat prefill (quick check-ins, "ask about workout")
-    enum AppTab: Hashable { case coach, calendar, trends, chat }
+    enum AppTab: Hashable { case coach, plan, calendar, trends, chat }
     @Published var selectedTab: AppTab = .coach
     @Published var chatPrefill = ""
 
@@ -115,6 +134,7 @@ final class AppModel: ObservableObject {
             if let p = try? await pb.listPlanned() { planned = p }
             if let m = try? await pb.listMessages() { messages = m }
             if let r = try? await pb.listRecoveryFull() { recovery = r }
+            if let w = try? await pb.listPlanWeeks() { planWeeks = w }
             do {
                 profile = try await pb.getProfile() // nil = no row → onboarding
                 profileLoaded = true
