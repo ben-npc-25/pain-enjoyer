@@ -22,6 +22,7 @@ struct RunRecord: Codable, Identifiable, Hashable {
     var avg_hr: Double?
     var elevation_gain_m: Double?
     var source_app: String?
+    var notes: String? // M3: athlete's subjective note, feeds the coach
 
     // PB dates look like "2026-06-11 07:30:00.000Z"
     static let pbDateFormatter: DateFormatter = {
@@ -63,6 +64,59 @@ struct CoachMessage: Codable, Identifiable {
     var kind: String?
     var provider: String?
     var created: String?
+    var role: String? // "coach" | "athlete" (M3 chat)
+
+    var isAthlete: Bool { role == "athlete" }
+}
+
+// MARK: - M3: planned workouts, chat, plan generation
+
+struct PlannedWorkout: Codable, Identifiable, Hashable {
+    var id: String
+    var date: String
+    var type: String
+    var distance_m: Double?
+    var target_pace_low_skm: Double?
+    var target_pace_high_skm: Double?
+    var description: String?
+    var status: String?
+
+    var startDate: Date { RunRecord.pbDateFormatter.date(from: date) ?? .distantPast }
+    var localDayKey: String { String(date.prefix(10)) } // stored at UTC midnight = day label
+    var distanceKm: Double { (distance_m ?? 0) / 1000 }
+    var isRest: Bool { type == "rest" }
+
+    var typeLabel: String {
+        switch type {
+        case "E": return "Easy"
+        case "T": return "Threshold"
+        case "I": return "Intervals"
+        case "R": return "Repetitions"
+        case "MP": return "Marathon pace"
+        case "LR": return "Long run"
+        default: return "Rest"
+        }
+    }
+
+    /// "4:25–4:35 /km" from the code-assigned zone targets.
+    var paceRange: String? {
+        func fmt(_ s: Double) -> String { "\(Int(s) / 60):" + String(format: "%02d", Int(s) % 60) }
+        guard let lo = target_pace_low_skm, lo > 0,
+              let hi = target_pace_high_skm, hi > 0 else { return nil }
+        return lo == hi ? "\(fmt(lo)) /km" : "\(fmt(lo))–\(fmt(hi)) /km"
+    }
+}
+
+struct ChatResponse: Codable {
+    var reply: String
+    var provider: String
+}
+
+struct GeneratedWeek: Codable {
+    var week_start: String
+    var phase: String
+    var cap_km: Double
+    var rationale: String
 }
 
 // MARK: - M2: recovery, profile, engine

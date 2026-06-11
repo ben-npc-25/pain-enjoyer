@@ -11,14 +11,21 @@ struct ContentView: View {
     @State private var showAudit = false
     @State private var showProfile = false
     @State private var showEngineDetail = false
+    @State private var showChat = false
     @State private var selectedDay: DaySelection?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    CalendarView(runsByDay: model.runsByDay) { dayRuns in
-                        selectedDay = DaySelection(runs: dayRuns)
+                    CalendarView(runsByDay: model.runsByDay,
+                                 plannedByDay: model.plannedByDay,
+                                 raceDayKey: model.raceDayKey) { dayKey in
+                        selectedDay = DaySelection(
+                            dayKey: dayKey,
+                            runs: model.runsByDay[dayKey] ?? [],
+                            planned: model.plannedByDay[dayKey] ?? []
+                        )
                     }
 
                     engineCard
@@ -70,10 +77,17 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showAudit) { AuditSheet() }
+            .sheet(isPresented: $showChat) { ChatSheet(model: model) }
             .sheet(item: $selectedDay) { sel in
-                DayDetailSheet(runs: sel.runs) { run in
-                    Task { await model.deleteRun(run) }
-                }
+                DayDetailSheet(
+                    dayKey: sel.dayKey,
+                    runs: sel.runs,
+                    planned: sel.planned,
+                    onDelete: { run in Task { await model.deleteRun(run) } },
+                    onSaveNotes: { run, notes in
+                        Task { await model.saveNotes(for: run, notes: notes) }
+                    }
+                )
             }
         }
     }
@@ -126,13 +140,31 @@ struct ContentView: View {
                 Text("No advice yet — sync a run and ask.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-            Button {
-                Task { await model.askCoach() }
-            } label: {
-                if model.busy { ProgressView().frame(maxWidth: .infinity) }
-                else { Text("Ask the coach").frame(maxWidth: .infinity) }
+            HStack(spacing: 10) {
+                Button {
+                    Task { await model.askCoach() }
+                } label: {
+                    if model.busy { ProgressView().frame(maxWidth: .infinity) }
+                    else { Text("Ask the coach").frame(maxWidth: .infinity) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.busy)
+
+                Button {
+                    showChat = true
+                } label: {
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
+            Button {
+                Task { await model.generatePlan() }
+            } label: {
+                Label("Plan next week", systemImage: "calendar.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
             .disabled(model.busy)
         }
         .padding()
@@ -144,7 +176,9 @@ struct ContentView: View {
 /// Sheet item wrapper — arrays aren't Identifiable.
 struct DaySelection: Identifiable {
     let id = UUID()
+    let dayKey: String
     let runs: [RunRecord]
+    let planned: [PlannedWorkout]
 }
 
 #Preview { ContentView() }

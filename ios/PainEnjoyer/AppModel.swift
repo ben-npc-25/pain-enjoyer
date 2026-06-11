@@ -18,7 +18,22 @@ final class AppModel: ObservableObject {
     /// (→ onboarding) from "couldn't reach the server".
     @Published var profileLoaded = false
 
+    // M3: plan + conversation
+    @Published var planned: [PlannedWorkout] = []
+    @Published var messages: [CoachMessage] = []
+    @Published var chatBusy = false
+
     var needsOnboarding: Bool { profileLoaded && profile == nil }
+
+    var plannedByDay: [String: [PlannedWorkout]] {
+        Dictionary(grouping: planned) { $0.localDayKey }
+    }
+
+    /// "2026-10-08" from the profile's race_date — calendar shows 🏁 there.
+    var raceDayKey: String? {
+        guard let rd = profile?.race_date, rd.count >= 10 else { return nil }
+        return String(rd.prefix(10))
+    }
 
     /// Runs grouped by local-day key ("2026-06-11") — what the calendar consumes.
     var runsByDay: [String: [RunRecord]] {
@@ -71,6 +86,8 @@ final class AppModel: ObservableObject {
             runs = try await pb.listRuns()
             coachMessage = try? await pb.latestCoachMessage()
             engine = try? await pb.engineState()
+            if let p = try? await pb.listPlanned() { planned = p }
+            if let m = try? await pb.listMessages() { messages = m }
             do {
                 profile = try await pb.getProfile() // nil = no row → onboarding
                 profileLoaded = true
@@ -112,6 +129,51 @@ final class AppModel: ObservableObject {
             try await pb.uploadRun(run)
             await refresh(syncHealth: false)
             status = "Run added"
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: M3 actions
+
+    func sendChat(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        chatBusy = true; defer { chatBusy = false }
+        // optimistic append so the bubble shows while the coach thinks
+        messages.append(CoachMessage(id: "local-\(UUID().uuidString)", content: trimmed,
+                                     kind: "feedback", provider: nil, created: nil, role: "athlete"))
+        do {
+            let pb = try await client()
+            _ = try await pb.chat(message: trimmed)
+            messages = (try? await pb.listMessages()) ?? messages
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    func generatePlan() async {
+        busy = true; defer { busy = false }
+        do {
+            status = "Coach is planning next week…"
+            let pb = try await client()
+            let week = try await pb.generateWeek()
+            planned = (try? await pb.listPlanned()) ?? planned
+            status = "Planned week of \(week.week_start) (\(week.phase), cap \(Int(week.cap_km)) km)"
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    func saveNotes(for run: RunRecord, notes: String) async {
+        do {
+            let pb = try await client()
+            try await pb.updateRunNotes(id: run.id, notes: notes)
+            if let i = runs.firstIndex(where: { $0.id == run.id }) {
+                runs[i].notes = notes
+            }
+            saveCache()
+            status = "Note saved"
         } catch {
             status = "✗ \(error.localizedDescription)"
         }

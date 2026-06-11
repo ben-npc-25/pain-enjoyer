@@ -88,6 +88,28 @@ into `recovery_daily` on every sync (60-day backfill on the first one).
 BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test (read-only)
 ```
 
+## M3 — race plan + conversation
+
+- **Weekly plan**: `POST /api/coach/plan-week` + a Sunday-evening cron
+  (`COACH_PLAN_CRON_UTC`, default 10:00 UTC Sun). Code owns the rails — weekly
+  km cap from chronic load (×1.15, ACWR-safe), phase from weeks-to-race, pace
+  targets from the VDOT zones, **injured → all-rest week** — and mechanically
+  repairs whatever the LLM proposes outside them (repairs are logged into the
+  week's rationale). The LLM only chooses structure and writes the words.
+- **Plan vs actual**: planned workouts overlay the calendar (type letter;
+  orange planned / green done / red skipped), 🏁 on race day. The morning cron
+  reconciles yesterday: run landed → `done`, no run → `skipped`, rest → `done`.
+- **Chat**: two-way thread with the coach — `POST /api/coach/chat`; both sides
+  persist in `coach_messages` (role `athlete`/`coach`), and every reply is
+  grounded in the engine facts + recent conversation. (M4's coach_memory will
+  distill from this thread.)
+- **Run notes**: per-run athlete notes ("ankle twinged at km 4") ride along in
+  advise/chat prompts — subjective context is LLM territory, never engine math.
+- All of it is testable offline: `LLM_PROVIDER=mock` (canned responses via
+  `LLM_MOCK_RESPONSE[_WEEKLY|_DAILY]`) — `./scripts/test-engine-local.sh` runs
+  the engine fixtures plus a deliberately rail-breaking plan to prove the
+  sanitizer holds.
+
 ## Provider flip (dev → real season)
 
 In `server/.env`: set `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY=...`, then

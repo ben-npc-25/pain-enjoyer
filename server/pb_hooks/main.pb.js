@@ -67,6 +67,14 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
     const persona = require(`${__hooks}/persona.js`).PERSONA;
     const coach = require(`${__hooks}/coach.js`);
     const engine = require(`${__hooks}/engine.js`);
+    const plan = require(`${__hooks}/plan.js`);
+
+    // M3: settle yesterday's plan first (done/skipped) so today's advice
+    // reflects reality, not intentions.
+    const rec = plan.reconcile($app);
+    if (rec.done || rec.skipped) {
+      console.log("reconcile: " + rec.done + " done, " + rec.skipped + " skipped");
+    }
 
     const facts = coach.latestRunFacts($app);
     if (!facts) return; // nothing synced yet — stay quiet
@@ -109,6 +117,106 @@ routerAdd(
   },
   $apis.requireAuth()
 );
+
+// ── POST /api/coach/chat ───────────────────────────────────────────────
+// M3: two-way conversation. Athlete message + coach reply both land in
+// coach_messages (role athlete|coach) — M4's coach_memory distills from here.
+
+routerAdd(
+  "POST",
+  "/api/coach/chat",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA;
+      const coach = require(`${__hooks}/coach.js`);
+      const engine = require(`${__hooks}/engine.js`);
+
+      const body = e.requestInfo().body;
+      const message = String((body && body.message) || "").trim();
+      if (!message) return e.json(400, { error: "message is required" });
+      if (message.length > 2000) return e.json(400, { error: "message too long (2000 max)" });
+
+      // history BEFORE saving the new message (it goes in the prompt itself)
+      const history = coach.recentMessages(e.app, 10);
+      coach.saveAthleteMessage(e.app, message);
+
+      const reply = llm.generate(
+        "daily",
+        persona,
+        coach.buildChatPrompt(
+          coach.profileFacts(e.app),
+          engine.forLLM(engine.computeEngineState(e.app)),
+          history,
+          coach.latestRunFacts(e.app),
+          message
+        )
+      );
+      coach.saveCoachMessage(e.app, "feedback", reply, llm.provider());
+      return e.json(200, { reply: reply, provider: llm.provider() });
+    } catch (err) {
+      console.log("chat failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
+// ── POST /api/coach/plan-week ──────────────────────────────────────────
+// M3: generate (or regenerate) next week's plan. Optional ?start=YYYY-MM-DD
+// (a Monday) to target a specific week. Code owns the rails; LLM the words.
+
+routerAdd(
+  "POST",
+  "/api/coach/plan-week",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA;
+      const engine = require(`${__hooks}/engine.js`);
+      const plan = require(`${__hooks}/plan.js`);
+
+      let start = null;
+      const q = e.request.url.query().get("start");
+      if (q) {
+        start = new Date(q + "T00:00:00Z");
+        if (isNaN(start.getTime())) return e.json(400, { error: "bad start date" });
+      }
+      plan.reconcile(e.app); // settle the past before planning the future
+      const result = plan.generateWeek(e.app, llm, persona, engine, start);
+      return e.json(200, result);
+    } catch (err) {
+      console.log("plan-week failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
+// ── weekly plan cron ───────────────────────────────────────────────────
+// Sunday 10:00 UTC (= Sunday evening HKT): plan the week that starts Monday.
+// Skips quietly when there's no training history at all.
+
+cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => {
+  try {
+    const llm = require(`${__hooks}/llm.js`);
+    const persona = require(`${__hooks}/persona.js`).PERSONA;
+    const engine = require(`${__hooks}/engine.js`);
+    const plan = require(`${__hooks}/plan.js`);
+    const coach = require(`${__hooks}/coach.js`);
+
+    if (!coach.latestRunFacts($app)) return;
+    const result = plan.generateWeek($app, llm, persona, engine, null);
+    coach.saveCoachMessage(
+      $app, "plan_change",
+      "New week planned (" + result.phase + ", " + result.week_start + "): " + result.rationale,
+      llm.provider()
+    );
+    console.log("weekly-plan: generated", result.week_start);
+  } catch (err) {
+    console.log("weekly-plan failed:", String(err));
+  }
+});
 
 // ── GET /api/coach/health ──────────────────────────────────────────────
 // Unauthenticated liveness probe so the tunnel + service can be checked

@@ -146,6 +146,40 @@ final class PocketBaseClient {
     func updateRecovery(id: String, _ r: RecoveryPayload) async throws {
         try await request("/api/collections/recovery_daily/records/\(id)", method: "PATCH", body: r)
     }
+
+    // MARK: M3 — plan, chat, run notes
+
+    func listPlanned() async throws -> [PlannedWorkout] {
+        let data = try await request("/api/collections/planned_workouts/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "500"),
+                                             .init(name: "sort", value: "-date")])
+        return try JSONDecoder().decode(ListResponse<PlannedWorkout>.self, from: data).items
+    }
+
+    func generateWeek() async throws -> GeneratedWeek {
+        let data = try await request("/api/coach/plan-week")
+        return try JSONDecoder().decode(GeneratedWeek.self, from: data)
+    }
+
+    func chat(message: String) async throws -> ChatResponse {
+        struct Msg: Encodable { let message: String }
+        let data = try await request("/api/coach/chat", body: Msg(message: message))
+        return try JSONDecoder().decode(ChatResponse.self, from: data)
+    }
+
+    /// Conversation, oldest first.
+    func listMessages(limit: Int = 50) async throws -> [CoachMessage] {
+        let data = try await request("/api/collections/coach_messages/records", method: "GET",
+                                     query: [.init(name: "perPage", value: String(limit)),
+                                             .init(name: "sort", value: "-created")])
+        return try JSONDecoder().decode(ListResponse<CoachMessage>.self, from: data).items.reversed()
+    }
+
+    func updateRunNotes(id: String, notes: String) async throws {
+        struct Notes: Encodable { let notes: String }
+        try await request("/api/collections/runs/records/\(id)", method: "PATCH",
+                          body: Notes(notes: notes))
+    }
 }
 
 /// Type-erasing wrapper so `request` can take any Encodable.

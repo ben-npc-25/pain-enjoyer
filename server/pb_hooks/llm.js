@@ -111,12 +111,22 @@ function claudeGenerate(tier, persona, prompt) {
   );
 }
 
+// Test-only provider: returns canned text from env, per tier. Lets the local
+// smoke test exercise plan/chat handlers with zero network and zero keys.
+function mockGenerate(tier) {
+  const specific = $os.getenv(
+    tier === "weekly" ? "LLM_MOCK_RESPONSE_WEEKLY" : "LLM_MOCK_RESPONSE_DAILY"
+  );
+  return specific || $os.getenv("LLM_MOCK_RESPONSE") || "mock response";
+}
+
 module.exports = {
   provider: () => $os.getenv("LLM_PROVIDER") || "gemini",
   generate: function (tier, persona, prompt) {
     const p = $os.getenv("LLM_PROVIDER") || "gemini";
     if (p === "claude") return claudeGenerate(tier, persona, prompt);
     if (p === "gemini") return geminiGenerate(persona, prompt);
+    if (p === "mock") return mockGenerate(tier);
     throw new Error("unknown LLM_PROVIDER: " + p);
   },
 };

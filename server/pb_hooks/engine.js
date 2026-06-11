@@ -181,6 +181,16 @@ function computeVdot(runs, now) {
     };
   }
   const vdot = round(best.vdot, 1);
+  // Raw sec/km per zone — the plan generator fills workout pace targets from
+  // these (LLM never computes paces). Strings below are for display/LLM.
+  const zonesSec = {
+    easy_low: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.easy_low)),
+    easy_high: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.easy_high)),
+    marathon: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.marathon)),
+    threshold: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.threshold)),
+    interval: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.interval)),
+    repetition: Math.round(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.repetition)),
+  };
   const zones = {
     easy:
       fmtPace(paceSecPerKmForFraction(vdot, ZONE_FRACTIONS.easy_low)) +
@@ -198,6 +208,7 @@ function computeVdot(runs, now) {
     available: true,
     value: vdot,
     zones: zones,
+    zones_sec: zonesSec,
     source_run: {
       date: isoDay(r.date),
       distance_km: round(r.distM / 1000, 2),

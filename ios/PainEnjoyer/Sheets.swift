@@ -1,49 +1,195 @@
 import SwiftUI
 
-// MARK: - Day detail
+// MARK: - Day detail (M3: planned vs actual + athlete notes)
 
 struct DayDetailSheet: View {
+    let dayKey: String
     let runs: [RunRecord]
+    let planned: [PlannedWorkout]
     let onDelete: (RunRecord) -> Void
+    let onSaveNotes: (RunRecord, String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var notesDraft: [String: String] = [:]
+
+    private var title: String {
+        (runs.first?.startDate ?? planned.first?.startDate)?
+            .formatted(date: .abbreviated, time: .omitted) ?? dayKey
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(runs) { run in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(String(format: "%.2f km", run.distanceKm)).font(.title3.bold())
-                            Spacer()
-                            Text(run.source_app ?? "").font(.caption).foregroundStyle(.secondary)
-                        }
-                        HStack(spacing: 16) {
-                            Label(run.durationString, systemImage: "stopwatch")
-                            Label(run.paceString, systemImage: "speedometer")
-                            if let hr = run.avg_hr, hr > 0 {
-                                Label("\(Int(hr)) bpm", systemImage: "heart")
+                if !planned.isEmpty {
+                    Section("Planned") {
+                        ForEach(planned) { wo in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(wo.typeLabel).font(.headline)
+                                    if wo.distanceKm > 0 {
+                                        Text(String(format: "%.1f km", wo.distanceKm))
+                                            .font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    statusBadge(wo.status ?? "planned")
+                                }
+                                if let pace = wo.paceRange {
+                                    Label(pace, systemImage: "speedometer")
+                                        .font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                if let d = wo.description, !d.isEmpty {
+                                    Text(d).font(.subheadline).foregroundStyle(.secondary)
+                                }
                             }
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        if let elev = run.elevation_gain_m, elev > 0 {
-                            Label("\(Int(elev)) m elevation", systemImage: "mountain.2")
-                                .font(.subheadline).foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
                         }
                     }
-                    .padding(.vertical, 4)
-                    .swipeActions {
-                        Button(role: .destructive) { onDelete(run) } label: {
-                            Label("Delete", systemImage: "trash")
+                }
+
+                if !runs.isEmpty {
+                    Section(planned.isEmpty ? "Runs" : "Actual") {
+                        ForEach(runs) { run in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(String(format: "%.2f km", run.distanceKm)).font(.title3.bold())
+                                    Spacer()
+                                    Text(run.source_app ?? "").font(.caption).foregroundStyle(.secondary)
+                                }
+                                HStack(spacing: 16) {
+                                    Label(run.durationString, systemImage: "stopwatch")
+                                    Label(run.paceString, systemImage: "speedometer")
+                                    if let hr = run.avg_hr, hr > 0 {
+                                        Label("\(Int(hr)) bpm", systemImage: "heart")
+                                    }
+                                }
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                HStack {
+                                    TextField("How did it feel? (the coach reads this)",
+                                              text: binding(for: run), axis: .vertical)
+                                        .font(.subheadline)
+                                        .lineLimit(1...3)
+                                    if binding(for: run).wrappedValue != (run.notes ?? "") {
+                                        Button("Save") {
+                                            onSaveNotes(run, binding(for: run).wrappedValue)
+                                        }
+                                        .font(.caption.bold())
+                                        .buttonStyle(.borderedProminent)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .swipeActions {
+                                Button(role: .destructive) { onDelete(run) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle(runs.first?.startDate.formatted(date: .abbreviated, time: .omitted) ?? "Runs")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() } }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+    }
+
+    private func binding(for run: RunRecord) -> Binding<String> {
+        Binding(
+            get: { notesDraft[run.id] ?? run.notes ?? "" },
+            set: { notesDraft[run.id] = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ status: String) -> some View {
+        Text(status)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(badgeColor(status).opacity(0.15)))
+            .foregroundStyle(badgeColor(status))
+    }
+
+    private func badgeColor(_ status: String) -> Color {
+        switch status {
+        case "done": return .green
+        case "skipped": return .red
+        case "modified": return .orange
+        default: return .blue
+        }
+    }
+}
+
+// MARK: - M3: chat with the coach
+
+struct ChatSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(model.messages) { msg in
+                                bubble(msg)
+                            }
+                            if model.chatBusy {
+                                HStack { ProgressView(); Text("Coach is thinking…")
+                                        .font(.caption).foregroundStyle(.secondary) }
+                                    .id("thinking")
+                            }
+                        }
+                        .padding()
+                    }
+                    .onChange(of: model.messages.count, initial: true) { _, _ in
+                        if let last = model.messages.last?.id {
+                            withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                        }
+                    }
+                }
+                Divider()
+                HStack(spacing: 8) {
+                    TextField("Tell your coach anything…", text: $draft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...4)
+                    Button {
+                        let text = draft
+                        draft = ""
+                        Task { await model.sendChat(text) }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill").font(.title2)
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || model.chatBusy)
+                }
+                .padding()
+            }
+            .navigationTitle("Coach chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { dismiss() } }
+        }
+    }
+
+    @ViewBuilder
+    private func bubble(_ msg: CoachMessage) -> some View {
+        HStack {
+            if msg.isAthlete { Spacer(minLength: 40) }
+            Text(msg.content)
+                .font(.subheadline)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(msg.isAthlete ? Color.accentColor.opacity(0.9)
+                                            : Color(.secondarySystemBackground))
+                )
+                .foregroundStyle(msg.isAthlete ? .white : .primary)
+                .frame(maxWidth: .infinity,
+                       alignment: msg.isAthlete ? .trailing : .leading)
+            if !msg.isAthlete { Spacer(minLength: 40) }
+        }
+        .id(msg.id)
     }
 }
 

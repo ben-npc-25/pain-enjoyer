@@ -43,9 +43,24 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   estimate (180) that classifies everything hard; set real HRmax to calibrate.
   Re-verify any time: `ssh ben@192.168.1.236 'cd ~/pain-enjoyer &&
   BASE_URL=http://127.0.0.1:8090 ./scripts/test-engine-live.sh'` (read-only).
-- **M3 next**: weekly plan generation (LLM weekly tier), plan-vs-actual
-  overlay on the calendar, daily check-in. Engine facts already ride in every
-  prompt; plan generation should consume them + the race goal.
+- **M3 code complete + smoke-tested (2026-06-11), deploy = Ben's one-liner**:
+  weekly plan generation with deterministic rails (`plan.js`: cap =
+  chronic×1.15, phase from weeks-to-race, paces from `zones_sec`, injured →
+  all-rest; sanitizer repairs rail-breaking LLM output and logs adjustments
+  into the rationale), `POST /api/coach/plan-week` + Sunday 10:00 UTC cron
+  (`COACH_PLAN_CRON_UTC`) + reconcile (morning cron and before each
+  generation: run→done, miss→skipped, rest→done). Two-way **chat**
+  (`POST /api/coach/chat`, roles in coach_messages), **runs.notes** in
+  prompts. iOS: calendar overlay (type letters, status colors, 🏁 race day,
+  future months), day detail planned-vs-actual + notes editor, chat sheet,
+  "Plan next week" button. Local smoke (mock LLM, deliberately rail-breaking
+  fixture): engine 14/14 + injured-rest + clamps + chat + reconcile all pass.
+  iOS built clean + installed. **To finish**: `./scripts/deploy-server.sh
+  ben@192.168.1.236`, then in-app "Plan next week" (expect an all-rest rehab
+  week while injured) + a chat message round-trip.
+- **M4 next**: coach_memory distillation (chat thread is now the raw
+  material), adaptive proactivity from engagement, traffic-light-aware
+  morning advice tone.
 
 ## Infrastructure
 

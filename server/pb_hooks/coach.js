@@ -31,7 +31,39 @@ function latestRunFacts(app) {
     avg_hr: run.getFloat("avg_hr") || null,
     elevation_gain_m: run.getFloat("elevation_gain_m") || null,
     source_app: run.getString("source_app") || null,
+    athlete_notes: run.getString("notes") || null, // M3: subjective context
   };
+}
+
+// M3: recent conversation, oldest→newest, for chat context. Athlete notes on
+// runs and these messages are the coach's subjective inputs (PLAN.md §1).
+function recentMessages(app, n) {
+  const recs = app.findRecordsByFilter("coach_messages", "id != ''", "-created", n || 10, 0);
+  const out = [];
+  for (const r of recs) {
+    out.push({
+      role: r.getString("role") || "coach",
+      content: r.getString("content").slice(0, 600),
+    });
+  }
+  return out.reverse();
+}
+
+function buildChatPrompt(profile, engineFacts, history, runFacts, userMessage) {
+  let h = "";
+  for (const m of history) {
+    h += (m.role === "athlete" ? "Athlete: " : "Coach: ") + m.content + "\n";
+  }
+  return (
+    "Today is " + new Date().toISOString().slice(0, 10) + ".\n\n" +
+    "Athlete profile: " + JSON.stringify(profile || {}) + "\n\n" +
+    "Training engine — deterministic state (quote numbers verbatim, never recompute): " +
+    JSON.stringify(engineFacts) + "\n\n" +
+    "Most recent run: " + JSON.stringify(runFacts || { note: "none yet" }) + "\n\n" +
+    "Recent conversation:\n" + (h || "(none)\n") +
+    "\nThe athlete says: " + userMessage + "\n\n" +
+    "Reply as their coach, in the conversation's flow — concise, specific, no headings."
+  );
 }
 
 function profileFacts(app) {
@@ -86,9 +118,21 @@ function buildDailyPrompt(profile, facts, engineFacts) {
   return p;
 }
 
+function saveAthleteMessage(app, content) {
+  const col = app.findCollectionByNameOrId("coach_messages");
+  const rec = new Record(col);
+  rec.set("role", "athlete");
+  rec.set("kind", "feedback");
+  rec.set("content", content);
+  app.save(rec);
+}
+
 module.exports = {
   latestRunFacts,
   profileFacts,
   saveCoachMessage,
+  saveAthleteMessage,
+  recentMessages,
+  buildChatPrompt,
   buildDailyPrompt,
 };

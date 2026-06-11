@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Month grid: each day shows a dot + km when there's a run.
-/// Tap a day with runs → detail sheet. M3 overlays planned workouts here.
+/// Month grid: dot + km where there's a run, workout-type badge where there's
+/// a plan (M3), 🏁 on race day. Tap any day with content → detail sheet.
 struct CalendarView: View {
     let runsByDay: [String: [RunRecord]]
-    var onSelectDay: ([RunRecord]) -> Void
+    var plannedByDay: [String: [PlannedWorkout]] = [:]
+    var raceDayKey: String?
+    var onSelectDay: (String) -> Void
 
     @State private var monthOffset = 0
 
@@ -34,8 +36,8 @@ struct CalendarView: View {
             Text(displayedMonth.formatted(.dateTime.month(.wide).year()))
                 .font(.headline)
             Spacer()
+            // M3: future months are where the plan (and the race) lives.
             Button { monthOffset += 1 } label: { Image(systemName: "chevron.right") }
-                .disabled(monthOffset >= 0)
         }
         .padding(.horizontal, 4)
     }
@@ -74,14 +76,19 @@ struct CalendarView: View {
                   spacing: 6) {
             ForEach(Array(cells.enumerated()), id: \.offset) { _, day in
                 if let day {
+                    let key = day.localDayKey
                     DayCell(
                         day: day,
-                        runs: runsByDay[day.localDayKey] ?? [],
-                        isToday: calendar.isDateInToday(day)
+                        runs: runsByDay[key] ?? [],
+                        planned: plannedByDay[key] ?? [],
+                        isToday: calendar.isDateInToday(day),
+                        isRace: key == raceDayKey
                     )
                     .onTapGesture {
-                        let dayRuns = runsByDay[day.localDayKey] ?? []
-                        if !dayRuns.isEmpty { onSelectDay(dayRuns) }
+                        if !(runsByDay[key] ?? []).isEmpty
+                            || !(plannedByDay[key] ?? []).isEmpty {
+                            onSelectDay(key)
+                        }
                     }
                 } else {
                     Color.clear.frame(height: 46)
@@ -95,12 +102,22 @@ struct CalendarView: View {
         return runsByDay.filter { $0.key.hasPrefix(key) }.flatMap(\.value)
     }
 
+    private var monthPlannedKm: Double {
+        let key = displayedMonth.localDayKey.prefix(7)
+        return plannedByDay.filter { $0.key.hasPrefix(key) }
+            .flatMap(\.value).reduce(0) { $0 + $1.distanceKm }
+    }
+
     private var monthSummary: some View {
         let km = monthRuns.reduce(0) { $0 + $1.distanceKm }
         let count = monthRuns.count
-        return Text(count == 0
-                    ? "No runs this month yet"
-                    : String(format: "%d runs · %.1f km this month", count, km))
+        var text = count == 0
+            ? "No runs this month yet"
+            : String(format: "%d runs · %.1f km this month", count, km)
+        if monthPlannedKm > 0 {
+            text += String(format: " · %.0f km planned", monthPlannedKm)
+        }
+        return Text(text)
             .font(.footnote)
             .foregroundStyle(.secondary)
     }
@@ -109,34 +126,68 @@ struct CalendarView: View {
 private struct DayCell: View {
     let day: Date
     let runs: [RunRecord]
+    let planned: [PlannedWorkout]
     let isToday: Bool
+    let isRace: Bool
 
     private var km: Double { runs.reduce(0) { $0 + $1.distanceKm } }
+    private var plan: PlannedWorkout? { planned.first }
+
+    private var planColor: Color {
+        switch plan?.status {
+        case "done": return .green
+        case "skipped": return .red
+        default: return .orange
+        }
+    }
 
     var body: some View {
         VStack(spacing: 2) {
             Text("\(Calendar.current.component(.day, from: day))")
                 .font(.callout.weight(isToday ? .bold : .regular))
                 .foregroundStyle(isToday ? Color.accentColor : .primary)
-            if runs.isEmpty {
-                Circle().fill(.clear).frame(width: 6, height: 6)
-                Text(" ").font(.system(size: 8))
-            } else {
-                Circle().fill(Color.accentColor).frame(width: 6, height: 6)
-                Text(String(format: "%.0f", km))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
+            marker
         }
         .frame(maxWidth: .infinity, minHeight: 46)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(runs.isEmpty ? Color.clear : Color.accentColor.opacity(0.10))
+                .fill(background)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isToday ? Color.accentColor : .clear, lineWidth: 1)
         )
+    }
+
+    private var background: Color {
+        if isRace { return .purple.opacity(0.15) }
+        if !runs.isEmpty { return Color.accentColor.opacity(0.10) }
+        if let p = plan, !p.isRest { return planColor.opacity(0.08) }
+        return .clear
+    }
+
+    @ViewBuilder
+    private var marker: some View {
+        if isRace {
+            Text("🏁").font(.system(size: 11))
+            Text(" ").font(.system(size: 8))
+        } else if !runs.isEmpty {
+            Circle().fill(Color.accentColor).frame(width: 6, height: 6)
+            Text(String(format: "%.0f", km))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+        } else if let p = plan, !p.isRest {
+            // future/planned: type letter in the status color
+            Text(p.type)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(planColor)
+            Text(p.distanceKm > 0 ? String(format: "%.0f", p.distanceKm) : " ")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        } else {
+            Circle().fill(.clear).frame(width: 6, height: 6)
+            Text(" ").font(.system(size: 8))
+        }
     }
 }
 

@@ -43,6 +43,29 @@ SU_PASS="smoketest12345"
 "$PB_BIN" --dir "$WORK/pb_data" --migrationsDir "$REPO/server/pb_migrations" \
   superuser upsert "$SU_EMAIL" "$SU_PASS" >/dev/null
 
+# Mock LLM: plan/chat handlers run with zero network and zero keys. The
+# weekly mock deliberately BREAKS the rails (34 km over a 13 km cap, an
+# unknown type, 5 run days vs days_per_week=4, runs while injured) so the
+# test proves the deterministic sanitizer repairs all of it.
+NEXT_WEEK=($(python3 -c "
+import datetime
+now = datetime.datetime.now(datetime.timezone.utc).date()
+days = ((8 - now.isoweekday()) % 7) or 7   # next strictly-future Monday (matches plan.js)
+m = now + datetime.timedelta(days=days)
+print(' '.join(str(m + datetime.timedelta(days=i)) for i in range(7)))"))
+
+MOCK_WEEKLY='{"rationale":"Aggressive build week.","days":[
+ {"date":"'"${NEXT_WEEK[0]}"'","type":"E","distance_km":10,"description":"easy"},
+ {"date":"'"${NEXT_WEEK[1]}"'","type":"T","distance_km":10,"description":"tempo"},
+ {"date":"'"${NEXT_WEEK[2]}"'","type":"rest","distance_km":0,"description":"off"},
+ {"date":"'"${NEXT_WEEK[3]}"'","type":"E","distance_km":0,"description":"strides"},
+ {"date":"'"${NEXT_WEEK[4]}"'","type":"rest","distance_km":0,"description":"off"},
+ {"date":"'"${NEXT_WEEK[5]}"'","type":"banana","distance_km":4,"description":"???"},
+ {"date":"'"${NEXT_WEEK[6]}"'","type":"LR","distance_km":10,"description":"long"}]}'
+
+LLM_PROVIDER=mock \
+LLM_MOCK_RESPONSE_DAILY="Canned coach reply: ease back into it." \
+LLM_MOCK_RESPONSE_WEEKLY="$MOCK_WEEKLY" \
 "$PB_BIN" serve --dir "$WORK/pb_data" \
   --hooksDir "$REPO/server/pb_hooks" \
   --migrationsDir "$REPO/server/pb_migrations" \
@@ -160,3 +183,73 @@ if fails:
     sys.exit(1)
 print("✔ engine smoke test passed — every number matched the hand computation")
 PYEOF
+
+# ── 5. M3: plan generation while injured (rails override everything) ────
+echo "· M3: plan-week while injured…"
+curl -fsS -X POST "$BASE/api/coach/plan-week" -H "Authorization: $TOKEN" > "$WORK/plan-injured.json"
+python3 - "$WORK/plan-injured.json" <<'PYEOF'
+import json, sys
+p = json.load(open(sys.argv[1]))
+assert p["cap_km"] == 0, p["cap_km"]
+assert len(p["days"]) == 7, len(p["days"])
+assert all(d["type"] == "rest" and d["distance_km"] == 0 for d in p["days"]), p["days"]
+assert any("injured" in a for a in p["adjustments"]), p["adjustments"]
+assert p["phase"] == "base", p["phase"]   # race 2027-01-24 is ~32 weeks out
+print("  ✓ injured week: 7×rest, cap 0 km, override logged, phase base")
+PYEOF
+
+# ── 6. M3: chat round-trip (athlete + coach rows persisted) ─────────────
+echo "· M3: chat…"
+curl -fsS -X POST "$BASE/api/coach/chat" -H "Authorization: $TOKEN" \
+  -H 'content-type: application/json' -d '{"message":"ankle is sore today"}' |
+  python3 -c 'import sys,json; r=json.load(sys.stdin); assert "Canned coach reply" in r["reply"], r; print("  ✓ chat reply flows")'
+curl -fsS "$BASE/api/collections/coach_messages/records?perPage=2&sort=-created" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+roles = sorted(i["role"] for i in json.load(sys.stdin)["items"])
+assert roles == ["athlete", "coach"], roles
+print("  ✓ both sides of the conversation persisted")'
+
+# ── 7. M3: heal the athlete, regenerate — every rail must clamp ─────────
+echo "· M3: plan-week healthy (cap / unknown-type / days_per_week / paces)…"
+PROF_ID=$(curl -fsS "$BASE/api/collections/athlete_profile/records?perPage=1" -H "Authorization: $TOKEN" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"injured":false}' >/dev/null
+curl -fsS -X POST "$BASE/api/coach/plan-week" -H "Authorization: $TOKEN" > "$WORK/plan-healthy.json"
+python3 - "$WORK/plan-healthy.json" <<'PYEOF'
+import json, sys
+p = json.load(open(sys.argv[1]))
+days = p["days"]
+total = sum(d["distance_km"] for d in days)
+assert p["cap_km"] == 13, p["cap_km"]                      # round(11.6 × 1.15)
+assert abs(total - 13) <= 0.5, total                       # scaled to the cap
+run_days = [d for d in days if d["type"] != "rest"]
+assert len(run_days) == 4, [d["type"] for d in days]       # days_per_week enforced
+t = next(d for d in days if d["type"] == "T")
+assert (t["pace_low"], t["pace_high"]) == (303, 315), t    # threshold 309 ±2%
+lr = next(d for d in days if d["type"] == "LR")
+assert (lr["pace_low"], lr["pace_high"]) == (355, 408), lr # easy range from zones
+assert any("banana" in a for a in p["adjustments"]), p["adjustments"]
+assert any("scaled" in a for a in p["adjustments"]), p["adjustments"]
+print("  ✓ healthy week: 13 km cap, banana→E, 4 run days, paces from VDOT zones")
+PYEOF
+
+# ── 8. M3: reconcile (yesterday's plan → done/skipped) ──────────────────
+echo "· M3: reconcile…"
+Y="$(day 1)"
+post planned_workouts "{\"date\":\"${Y}T00:00:00.000Z\",\"type\":\"E\",\"distance_m\":5000,\"description\":\"missed\",\"status\":\"planned\"}"
+post planned_workouts "{\"date\":\"${Y}T00:00:00.000Z\",\"type\":\"rest\",\"distance_m\":0,\"description\":\"off\",\"status\":\"planned\"}"
+curl -fsS -X POST "$BASE/api/coach/plan-week" -H "Authorization: $TOKEN" >/dev/null  # reconciles first
+curl -fsS -G "$BASE/api/collections/planned_workouts/records" \
+  --data-urlencode "filter=date < '$(day 0) 00:00:00.000Z'" \
+  --data-urlencode "perPage=10" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+st = {i["type"]: i["status"] for i in json.load(sys.stdin)["items"]}
+assert st.get("E") == "skipped", st     # no run yesterday → skipped
+assert st.get("rest") == "done", st     # rest days complete themselves
+print("  ✓ reconcile: missed E → skipped, rest → done")'
+
+echo
+echo "✔ engine + M3 plan/chat smoke tests all passed"
