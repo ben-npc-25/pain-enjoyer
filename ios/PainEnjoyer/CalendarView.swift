@@ -184,6 +184,13 @@ private struct DayCell: View {
             Text(p.distanceKm > 0 ? String(format: "%.0f", p.distanceKm) : " ")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+        } else if plan != nil {
+            // planned rest day — visible (an injured rehab week is ALL of
+            // these) and tappable for the description
+            Text("zZ")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Text(" ").font(.system(size: 8))
         } else {
             Circle().fill(.clear).frame(width: 6, height: 6)
             Text(" ").font(.system(size: 8))
