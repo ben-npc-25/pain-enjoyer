@@ -110,6 +110,22 @@ BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test 
   the engine fixtures plus a deliberately rail-breaking plan to prove the
   sanitizer holds.
 
+## M4 — the coach knows you (+ the UI pass)
+
+- **coach_memory**: the morning cron (and `POST /api/coach/distill`) runs a
+  cheap LLM pass over the last 48 h of chat and upserts durable facts
+  (injuries+dates, preferences, patterns — never metrics the engine computes).
+  Code owns persistence: upsert-only, nothing auto-deleted — wrong memories
+  die by swipe in the app's **Coach memory** screen (brain icon), not by LLM
+  omission. Top facts ride as a stable block after the persona in every
+  prompt, so replies compound.
+- **Traffic-light tone rules** in the persona: 🔴 never prescribes running,
+  🟡 leads with caution, 🟢 may push.
+- **UI**: four tabs (Coach / Calendar / Trends / Chat), hero traffic-light
+  card, this-week strip, **Trends** (Swift Charts: weekly volume, HRV + RHR
+  vs baseline, per-run effort VDOT), app icon (regenerate:
+  `swift scripts/make-app-icon.swift`), accent color, haptics.
+
 ## Provider flip (dev → real season)
 
 In `server/.env`: set `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY=...`, then

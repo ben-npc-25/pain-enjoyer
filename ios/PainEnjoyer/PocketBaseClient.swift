@@ -180,6 +180,32 @@ final class PocketBaseClient {
         try await request("/api/collections/runs/records/\(id)", method: "PATCH",
                           body: Notes(notes: notes))
     }
+
+    // MARK: M4 — memory + recovery series
+
+    func listMemory() async throws -> [MemoryFact] {
+        let data = try await request("/api/collections/coach_memory/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "50"),
+                                             .init(name: "sort", value: "-confidence,-last_reinforced")])
+        return try JSONDecoder().decode(ListResponse<MemoryFact>.self, from: data).items
+    }
+
+    func deleteMemory(id: String) async throws {
+        try await request("/api/collections/coach_memory/records/\(id)", method: "DELETE")
+    }
+
+    func distillNow() async throws -> DistillResult {
+        let data = try await request("/api/coach/distill")
+        return try JSONDecoder().decode(DistillResult.self, from: data)
+    }
+
+    /// Full recovery rows for the Trends charts, newest first.
+    func listRecoveryFull(perPage: Int = 90) async throws -> [RecoveryFull] {
+        let data = try await request("/api/collections/recovery_daily/records", method: "GET",
+                                     query: [.init(name: "perPage", value: String(perPage)),
+                                             .init(name: "sort", value: "-date")])
+        return try JSONDecoder().decode(ListResponse<RecoveryFull>.self, from: data).items
+    }
 }
 
 /// Type-erasing wrapper so `request` can take any Encodable.

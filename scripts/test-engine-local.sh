@@ -63,9 +63,14 @@ MOCK_WEEKLY='{"rationale":"Aggressive build week.","days":[
  {"date":"'"${NEXT_WEEK[5]}"'","type":"banana","distance_km":4,"description":"???"},
  {"date":"'"${NEXT_WEEK[6]}"'","type":"LR","distance_km":10,"description":"long"}]}'
 
+MOCK_DISTILL='{"facts":[
+ {"id":null,"fact":"Ankle injury since June 2026; cleared date unknown","confidence":0.9},
+ {"id":null,"fact":"Prefers data-driven feedback over pep talk","confidence":0.7}]}'
+
 LLM_PROVIDER=mock \
 LLM_MOCK_RESPONSE_DAILY="Canned coach reply: ease back into it." \
 LLM_MOCK_RESPONSE_WEEKLY="$MOCK_WEEKLY" \
+LLM_MOCK_RESPONSE_DISTILL="$MOCK_DISTILL" \
 "$PB_BIN" serve --dir "$WORK/pb_data" \
   --hooksDir "$REPO/server/pb_hooks" \
   --migrationsDir "$REPO/server/pb_migrations" \
@@ -251,5 +256,23 @@ assert st.get("E") == "skipped", st     # no run yesterday → skipped
 assert st.get("rest") == "done", st     # rest days complete themselves
 print("  ✓ reconcile: missed E → skipped, rest → done")'
 
+# ── 9. M4: memory distillation (chat above seeded an athlete message) ───
+echo "· M4: distill memory from the conversation…"
+curl -fsS -X POST "$BASE/api/coach/distill" -H "Authorization: $TOKEN" |
+  python3 -c 'import sys,json; r=json.load(sys.stdin); assert r.get("created")==2, r; print("  ✓ distill created 2 facts")'
+curl -fsS "$BASE/api/collections/coach_memory/records?perPage=10" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+items = json.load(sys.stdin)["items"]
+assert len(items) == 2, len(items)
+facts = " | ".join(i["fact"] for i in items)
+assert "Ankle injury" in facts and "data-driven" in facts, facts
+assert all(0 <= i["confidence"] <= 1 for i in items), items
+print("  ✓ coach_memory holds the facts with confidence + provenance")'
+# memory block must now ride in prompts without breaking the handlers
+curl -fsS -X POST "$BASE/api/coach/chat" -H "Authorization: $TOKEN" \
+  -H 'content-type: application/json' -d '{"message":"thanks coach"}' |
+  python3 -c 'import sys,json; assert "reply" in json.load(sys.stdin); print("  ✓ chat still flows with memory block injected")'
+
 echo
-echo "✔ engine + M3 plan/chat smoke tests all passed"
+echo "✔ engine + M3 plan/chat + M4 memory smoke tests all passed"

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // MARK: - Wire models (match the PocketBase `runs` schema)
 
@@ -110,6 +111,59 @@ struct PlannedWorkout: Codable, Identifiable, Hashable {
 struct ChatResponse: Codable {
     var reply: String
     var provider: String
+}
+
+// MARK: - M4: memory, recovery series, effort score
+
+/// One durable fact the coach holds about the athlete (coach_memory row).
+struct MemoryFact: Codable, Identifiable {
+    var id: String
+    var fact: String
+    var confidence: Double?
+    var learned_from: String?
+    var last_reinforced: String?
+}
+
+struct DistillResult: Codable {
+    var skipped: Bool?
+    var created: Int?
+    var updated: Int?
+}
+
+/// Full recovery_daily row — feeds the Trends charts.
+struct RecoveryFull: Codable, Identifiable {
+    var id: String
+    var date: String
+    var hrv_sdnn_ms: Double?
+    var resting_hr: Double?
+    var sleep_hours: Double?
+    var vo2max: Double?
+
+    var day: Date { RunRecord.pbDateFormatter.date(from: date) ?? .distantPast }
+}
+
+extension RunRecord {
+    /// Daniels–Gilbert single-effort VDOT — display-only trend signal
+    /// (the coaching VDOT comes from the server engine, never from here).
+    var effortVDOT: Double? {
+        guard distance_m >= 3000, duration_s >= 720 else { return nil }
+        let t = duration_s / 60
+        let v = distance_m / t
+        let vo2 = -4.6 + 0.182258 * v + 0.000104 * v * v
+        let pct = 0.8 + 0.1894393 * exp(-0.012778 * t) + 0.2989558 * exp(-0.1932605 * t)
+        return vo2 / pct
+    }
+}
+
+extension PlannedWorkout {
+    /// Shared status color: future-blue, done-green, skipped-red.
+    var statusColor: Color {
+        switch status {
+        case "done": return .green
+        case "skipped": return .red
+        default: return .blue
+        }
+    }
 }
 
 struct GeneratedWeek: Codable {

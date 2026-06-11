@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Central observable state: runs, coach message, sync status.
 /// Keeps a tiny offline mirror (JSON file) so the calendar renders instantly
@@ -22,6 +23,14 @@ final class AppModel: ObservableObject {
     @Published var planned: [PlannedWorkout] = []
     @Published var messages: [CoachMessage] = []
     @Published var chatBusy = false
+
+    // M4: memory + recovery series (Trends)
+    @Published var memory: [MemoryFact] = []
+    @Published var recovery: [RecoveryFull] = []
+
+    func haptic(_ success: Bool = true) {
+        UINotificationFeedbackGenerator().notificationOccurred(success ? .success : .error)
+    }
 
     var needsOnboarding: Bool { profileLoaded && profile == nil }
 
@@ -88,6 +97,7 @@ final class AppModel: ObservableObject {
             engine = try? await pb.engineState()
             if let p = try? await pb.listPlanned() { planned = p }
             if let m = try? await pb.listMessages() { messages = m }
+            if let r = try? await pb.listRecoveryFull() { recovery = r }
             do {
                 profile = try await pb.getProfile() // nil = no row → onboarding
                 profileLoaded = true
@@ -134,6 +144,44 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: M4 actions
+
+    func loadMemory() async {
+        do {
+            let pb = try await client()
+            memory = try await pb.listMemory()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    func distillNow() async {
+        busy = true; defer { busy = false }
+        do {
+            status = "Distilling conversation into memory…"
+            let pb = try await client()
+            let r = try await pb.distillNow()
+            memory = (try? await pb.listMemory()) ?? memory
+            status = r.skipped == true
+                ? "Nothing new to remember (no recent chat)"
+                : "Memory updated: \(r.created ?? 0) new, \(r.updated ?? 0) reinforced"
+            haptic()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+            haptic(false)
+        }
+    }
+
+    func deleteMemory(_ fact: MemoryFact) async {
+        do {
+            let pb = try await client()
+            try await pb.deleteMemory(id: fact.id)
+            memory.removeAll { $0.id == fact.id }
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
     // MARK: M3 actions
 
     func sendChat(_ text: String) async {
@@ -147,8 +195,10 @@ final class AppModel: ObservableObject {
             let pb = try await client()
             _ = try await pb.chat(message: trimmed)
             messages = (try? await pb.listMessages()) ?? messages
+            haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"
+            haptic(false)
         }
     }
 
@@ -160,6 +210,7 @@ final class AppModel: ObservableObject {
             let week = try await pb.generateWeek()
             planned = (try? await pb.listPlanned()) ?? planned
             status = "Planned week of \(week.week_start) (\(week.phase), cap \(Int(week.cap_km)) km)"
+            haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"
         }
@@ -174,6 +225,7 @@ final class AppModel: ObservableObject {
             }
             saveCache()
             status = "Note saved"
+            haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"
         }
@@ -188,6 +240,7 @@ final class AppModel: ObservableObject {
             profileLoaded = true
             engine = try? await pb.engineState() // injury flag changes the light
             status = "Profile saved"
+            haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"
         }

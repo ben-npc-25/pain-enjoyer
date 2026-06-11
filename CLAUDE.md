@@ -58,9 +58,22 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   iOS built clean + installed. **To finish**: `./scripts/deploy-server.sh
   ben@192.168.1.236`, then in-app "Plan next week" (expect an all-rest rehab
   week while injured) + a chat message round-trip.
-- **M4 next**: coach_memory distillation (chat thread is now the raw
-  material), adaptive proactivity from engagement, traffic-light-aware
-  morning advice tone.
+- **M4 code complete + smoke-tested (2026-06-11), deploy = Ben's one-liner**:
+  coach_memory distillation (`memory.js` — morning cron + POST
+  /api/coach/distill; upsert-only, deletion = swipe in app; memory block
+  appended to persona in all 5 prompt paths), traffic-light tone rules in
+  persona (🔴 never prescribes running). UI overhaul: 4 tabs
+  (Coach/Calendar/Trends/Chat), hero light card + week strip, Trends (Swift
+  Charts: weekly km, HRV/RHR vs baseline, per-run effort VDOT), Memory
+  screen, app icon (traffic light; `swift scripts/make-app-icon.swift`),
+  accent color, haptics. Smoke: distill creates facts from mock + chat still
+  flows with memory injected. iOS built + installed. NO new migration (M4
+  uses M0's coach_memory collection). Deploy: `./scripts/deploy-server.sh
+  ben@192.168.1.236`.
+- **M5 next (needs Ben running again)**: adaptive proactivity + engagement
+  tracking — original M4 exit test from PLAN.md ("skip 3 check-ins → cadence
+  drops; HRV tanks → coach pulls a workout"). Deliberately deferred: not
+  exercisable while injured.
 
 ## Infrastructure
 

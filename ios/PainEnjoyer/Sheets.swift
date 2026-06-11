@@ -120,11 +120,10 @@ struct DayDetailSheet: View {
     }
 }
 
-// MARK: - M3: chat with the coach
+// MARK: - M3: chat with the coach (M4: lives as a tab)
 
-struct ChatSheet: View {
+struct ChatView: View {
     @ObservedObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
 
     var body: some View {
@@ -168,7 +167,6 @@ struct ChatSheet: View {
             }
             .navigationTitle("Coach chat")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { dismiss() } }
         }
     }
 

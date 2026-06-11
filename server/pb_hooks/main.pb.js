@@ -20,7 +20,8 @@ routerAdd(
     // (single-user app — exposing the error detail to ourselves is fine).
     try {
       const llm = require(`${__hooks}/llm.js`);
-      const persona = require(`${__hooks}/persona.js`).PERSONA;
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
       const coach = require(`${__hooks}/coach.js`);
       const engine = require(`${__hooks}/engine.js`);
 
@@ -64,10 +65,20 @@ routerAdd(
 cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
   try {
     const llm = require(`${__hooks}/llm.js`);
-    const persona = require(`${__hooks}/persona.js`).PERSONA;
+    const memory = require(`${__hooks}/memory.js`);
     const coach = require(`${__hooks}/coach.js`);
     const engine = require(`${__hooks}/engine.js`);
     const plan = require(`${__hooks}/plan.js`);
+
+    // M4: distill yesterday's conversation into memory BEFORE advising, so
+    // this morning's message already knows what was said.
+    try {
+      const d = memory.distill($app, llm);
+      if (!d.skipped) console.log("memory: +" + d.created + " ~" + d.updated);
+    } catch (err) {
+      console.log("memory distill failed (advice continues):", String(err));
+    }
+    const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock($app);
 
     // M3: settle yesterday's plan first (done/skipped) so today's advice
     // reflects reality, not intentions.
@@ -128,7 +139,8 @@ routerAdd(
   (e) => {
     try {
       const llm = require(`${__hooks}/llm.js`);
-      const persona = require(`${__hooks}/persona.js`).PERSONA;
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
       const coach = require(`${__hooks}/coach.js`);
       const engine = require(`${__hooks}/engine.js`);
 
@@ -172,7 +184,8 @@ routerAdd(
   (e) => {
     try {
       const llm = require(`${__hooks}/llm.js`);
-      const persona = require(`${__hooks}/persona.js`).PERSONA;
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
       const engine = require(`${__hooks}/engine.js`);
       const plan = require(`${__hooks}/plan.js`);
 
@@ -200,7 +213,8 @@ routerAdd(
 cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => {
   try {
     const llm = require(`${__hooks}/llm.js`);
-    const persona = require(`${__hooks}/persona.js`).PERSONA;
+    const memory = require(`${__hooks}/memory.js`);
+    const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock($app);
     const engine = require(`${__hooks}/engine.js`);
     const plan = require(`${__hooks}/plan.js`);
     const coach = require(`${__hooks}/coach.js`);
@@ -217,6 +231,26 @@ cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => 
     console.log("weekly-plan failed:", String(err));
   }
 });
+
+// ── POST /api/coach/distill ────────────────────────────────────────────
+// M4: manually trigger memory distillation (the morning cron also does it).
+// Returns what changed so the app's Memory screen can refresh meaningfully.
+
+routerAdd(
+  "POST",
+  "/api/coach/distill",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      return e.json(200, memory.distill(e.app, llm));
+    } catch (err) {
+      console.log("distill failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
 
 // ── GET /api/coach/health ──────────────────────────────────────────────
 // Unauthenticated liveness probe so the tunnel + service can be checked

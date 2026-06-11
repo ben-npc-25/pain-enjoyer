@@ -133,13 +133,7 @@ private struct DayCell: View {
     private var km: Double { runs.reduce(0) { $0 + $1.distanceKm } }
     private var plan: PlannedWorkout? { planned.first }
 
-    private var planColor: Color {
-        switch plan?.status {
-        case "done": return .green
-        case "skipped": return .red
-        default: return .orange
-        }
-    }
+    private var planColor: Color { plan?.statusColor ?? .blue }
 
     var body: some View {
         VStack(spacing: 2) {

@@ -1,17 +1,49 @@
 import SwiftUI
 
-/// M1 home screen: calendar + coach card. Sheets for settings / manual entry /
-/// day detail / HealthKit audit.
+/// M4 shell: four tabs over one shared model.
+/// Coach (hero light + advice) · Calendar (plan vs actual) · Trends · Chat.
 struct ContentView: View {
     @StateObject private var model = AppModel()
     @AppStorage("serverURL") private var serverURL = ""
 
-    @State private var showSettings = false
+    @State private var showFirstRunSettings = false
+    @State private var showOnboarding = false
+
+    var body: some View {
+        TabView {
+            CoachHomeView(model: model)
+                .tabItem { Label("Coach", systemImage: "figure.run") }
+            CalendarTabView(model: model)
+                .tabItem { Label("Calendar", systemImage: "calendar") }
+            TrendsView(model: model)
+                .tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }
+            ChatView(model: model)
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+        }
+        .task {
+            if serverURL.isEmpty { showFirstRunSettings = true }
+            else { await model.refresh() }
+        }
+        .onChange(of: model.needsOnboarding, initial: true) { _, needs in
+            if needs { showOnboarding = true } // server reachable, no profile row
+        }
+        .sheet(isPresented: $showFirstRunSettings, onDismiss: {
+            Task { await model.refresh() }
+        }) { SettingsSheet() }
+        .sheet(isPresented: $showOnboarding) {
+            ProfileSheet(existing: model.profile) { p in
+                Task { await model.saveProfile(p) }
+            }
+        }
+    }
+}
+
+/// Calendar tab: month grid + manual entry + HealthKit audit + day detail.
+struct CalendarTabView: View {
+    @ObservedObject var model: AppModel
+
     @State private var showManualEntry = false
     @State private var showAudit = false
-    @State private var showProfile = false
-    @State private var showEngineDetail = false
-    @State private var showChat = false
     @State private var selectedDay: DaySelection?
 
     var body: some View {
@@ -27,11 +59,6 @@ struct ContentView: View {
                             planned: model.plannedByDay[dayKey] ?? []
                         )
                     }
-
-                    engineCard
-
-                    coachCard
-
                     if !model.status.isEmpty {
                         Text(model.status)
                             .font(.footnote)
@@ -40,36 +67,14 @@ struct ContentView: View {
                 }
                 .padding(.vertical)
             }
-            .navigationTitle("Pain Enjoyer 🏃")
+            .navigationTitle("Calendar")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { showAudit = true } label: { Image(systemName: "waveform.path.ecg") }
-                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showProfile = true } label: { Image(systemName: "person.crop.circle") }
+                    Button { showAudit = true } label: { Image(systemName: "waveform.path.ecg") }
                     Button { showManualEntry = true } label: { Image(systemName: "plus") }
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
             .refreshable { await model.refresh() }
-            .task {
-                if serverURL.isEmpty { showSettings = true }
-                else { await model.refresh() }
-            }
-            .onChange(of: model.needsOnboarding, initial: true) { _, needs in
-                if needs { showProfile = true } // first run after M2: no profile row yet
-            }
-            .sheet(isPresented: $showSettings, onDismiss: {
-                Task { await model.refresh() }
-            }) { SettingsSheet() }
-            .sheet(isPresented: $showProfile) {
-                ProfileSheet(existing: model.profile) { p in
-                    Task { await model.saveProfile(p) }
-                }
-            }
-            .sheet(isPresented: $showEngineDetail) {
-                if let eng = model.engine { EngineDetailSheet(engine: eng) }
-            }
             .sheet(isPresented: $showManualEntry) {
                 ManualEntrySheet { date, km, min, hr in
                     Task { await model.addManualRun(date: date, distanceKm: km,
@@ -77,7 +82,6 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showAudit) { AuditSheet() }
-            .sheet(isPresented: $showChat) { ChatSheet(model: model) }
             .sheet(item: $selectedDay) { sel in
                 DayDetailSheet(
                     dayKey: sel.dayKey,
@@ -90,86 +94,6 @@ struct ContentView: View {
                 )
             }
         }
-    }
-
-    /// M2: traffic light + VDOT at a glance; tap for the full engine state.
-    @ViewBuilder
-    private var engineCard: some View {
-        if let eng = model.engine {
-            Button { showEngineDetail = true } label: {
-                HStack(spacing: 12) {
-                    Text(eng.traffic_light.emoji).font(.system(size: 34))
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(eng.traffic_light.light.capitalized).font(.headline)
-                            if let v = eng.vdot.value {
-                                Text(String(format: "· VDOT %.1f", v))
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }
-                        Text(eng.traffic_light.reasons.first ?? "")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).multilineTextAlignment(.leading)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.bold()).foregroundStyle(.tertiary)
-                }
-                .padding()
-                .background(RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(.secondarySystemBackground)))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal)
-        }
-    }
-
-    private var coachCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Coach", systemImage: "figure.run.circle.fill")
-                    .font(.headline)
-                Spacer()
-                if let p = model.coachMessage?.provider {
-                    Text(p).font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-            if let msg = model.coachMessage {
-                Text(msg.content).font(.subheadline)
-            } else {
-                Text("No advice yet — sync a run and ask.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 10) {
-                Button {
-                    Task { await model.askCoach() }
-                } label: {
-                    if model.busy { ProgressView().frame(maxWidth: .infinity) }
-                    else { Text("Ask the coach").frame(maxWidth: .infinity) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.busy)
-
-                Button {
-                    showChat = true
-                } label: {
-                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            Button {
-                Task { await model.generatePlan() }
-            } label: {
-                Label("Plan next week", systemImage: "calendar.badge.plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.busy)
-        }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemBackground)))
-        .padding(.horizontal)
     }
 }
 

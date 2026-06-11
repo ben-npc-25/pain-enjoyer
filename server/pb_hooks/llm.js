@@ -111,12 +111,11 @@ function claudeGenerate(tier, persona, prompt) {
   );
 }
 
-// Test-only provider: returns canned text from env, per tier. Lets the local
-// smoke test exercise plan/chat handlers with zero network and zero keys.
+// Test-only provider: returns canned text from env, per tier
+// (LLM_MOCK_RESPONSE_WEEKLY / _DAILY / _DISTILL / …). Lets the local smoke
+// test exercise plan/chat/memory handlers with zero network and zero keys.
 function mockGenerate(tier) {
-  const specific = $os.getenv(
-    tier === "weekly" ? "LLM_MOCK_RESPONSE_WEEKLY" : "LLM_MOCK_RESPONSE_DAILY"
-  );
+  const specific = $os.getenv("LLM_MOCK_RESPONSE_" + String(tier).toUpperCase());
   return specific || $os.getenv("LLM_MOCK_RESPONSE") || "mock response";
 }
 
