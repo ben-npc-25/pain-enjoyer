@@ -8,6 +8,7 @@ struct DayDetailSheet: View {
     let planned: [PlannedWorkout]
     let onDelete: (RunRecord) -> Void
     let onSaveNotes: (RunRecord, String) -> Void
+    var onSaveEffort: ((RunRecord, Int) -> Void)? = nil // M7 Phase 1
     var onAskCoach: ((PlannedWorkout) -> Void)? = nil
     var zones: [String: Double]? = nil
     @Environment(\.dismiss) private var dismiss
@@ -59,7 +60,8 @@ struct DayDetailSheet: View {
                     Section(planned.isEmpty ? "Runs" : "Actual") {
                         ForEach(runs) { run in
                             NavigationLink {
-                                RunDetailView(run: run, zones: zones, onSaveNotes: onSaveNotes)
+                                RunDetailView(run: run, zones: zones,
+                                              onSaveNotes: onSaveNotes, onSaveEffort: onSaveEffort)
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
@@ -372,10 +374,15 @@ struct ProfileSheet: View {
                     Toggle("Currently injured", isOn: $injured)
                     if injured {
                         TextField("What's injured?", text: $injuryNote)
-                        Toggle("Target return date", isOn: $hasReturnDate)
+                    }
+                    // Return date stays editable after you heal — it anchors the
+                    // 4-week comeback ramp (easy-only, low cap) once injured is off.
+                    if injured || hasReturnDate {
+                        Toggle(injured ? "Target return date" : "Recently returned to running",
+                               isOn: $hasReturnDate)
                         if hasReturnDate {
-                            DatePicker("Return to running", selection: $returnDate,
-                                       displayedComponents: .date)
+                            DatePicker(injured ? "Return to running" : "Date you came back",
+                                       selection: $returnDate, displayedComponents: .date)
                         }
                     }
                 } header: {
@@ -383,7 +390,9 @@ struct ProfileSheet: View {
                 } footer: {
                     Text(injured
                          ? "The engine holds the traffic light at 🔴 until you clear this."
-                         : "Flip this if you get hurt — the coach adapts immediately.")
+                         : (hasReturnDate
+                            ? "For 4 weeks from this date the coach ramps you back: low cap, easy running only at first."
+                            : "Flip this if you get hurt — the coach adapts immediately."))
                 }
             }
             .navigationTitle(existing == nil ? "Welcome — set up your coach" : "Athlete profile")
@@ -412,7 +421,9 @@ struct ProfileSheet: View {
             long_run_day: longRunDay,
             injured: injured,
             injury_note: injured ? injuryNote : "",
-            return_to_run_date: (injured && hasReturnDate) ? Self.pbDay(returnDate) : "",
+            // Persist regardless of `injured`: the return date drives the
+            // post-injury comeback ramp, which runs AFTER injured is cleared.
+            return_to_run_date: hasReturnDate ? Self.pbDay(returnDate) : "",
             hr_max: Double(hrMax) ?? 0
         )
     }
@@ -436,8 +447,9 @@ struct EngineDetailSheet: View {
     private static let zoneOrder = [("easy", "Easy"), ("marathon", "Marathon"),
                                     ("threshold", "Threshold"), ("interval", "Interval"),
                                     ("repetition", "Repetition")]
-    private static let factOrder = ["athlete_status", "race_goal", "current_vdot",
-                                    "training_load", "recovery", "intensity_8020", "history"]
+    private static let factOrder = ["athlete_status", "return_to_run", "race_goal",
+                                    "current_vdot", "training_load", "recovery",
+                                    "intensity_8020", "history"]
 
     var body: some View {
         NavigationStack {

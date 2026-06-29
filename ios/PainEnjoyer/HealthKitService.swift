@@ -83,8 +83,81 @@ final class HealthKitService {
                 }
                 store.execute(q)
             }
-        let runs = samples.compactMap { $0 as? HKWorkout }.map(payload(from:))
+        var runs: [RunPayload] = []
+        for w in samples.compactMap({ $0 as? HKWorkout }) {
+            var p = payload(from: w)
+            p.splits = await fetchSplits(for: w) // M7 Phase 4 (empty when data is too coarse)
+            runs.append(p)
+        }
         return (runs, newAnchor)
+    }
+
+    /// M7 Phase 4: reconstruct per-kilometre splits from the workout's
+    /// per-sample distance + heart-rate series. Returns [] when the source app
+    /// only wrote an aggregate (no per-sample distance) — the engine then
+    /// degrades gracefully rather than inventing numbers.
+    func fetchSplits(for workout: HKWorkout) async -> [RunSplit] {
+        let pred = HKQuery.predicateForObjects(from: workout)
+        let sort = [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
+
+        func samples(_ type: HKQuantityType) async -> [HKQuantitySample] {
+            (try? await withCheckedThrowingContinuation { cont in
+                let q = HKSampleQuery(sampleType: type, predicate: pred,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: sort) { _, s, error in
+                    if let error { cont.resume(throwing: error) }
+                    else { cont.resume(returning: (s as? [HKQuantitySample]) ?? []) }
+                }
+                store.execute(q)
+            }) ?? []
+        }
+
+        let distSamples = await samples(HKQuantityType(.distanceWalkingRunning))
+        guard !distSamples.isEmpty else { return [] }
+        let hrSamples = await samples(HKQuantityType(.heartRate))
+
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        func avgHR(_ start: Date, _ end: Date) -> Double? {
+            let vals = hrSamples
+                .filter { $0.startDate >= start && $0.startDate < end }
+                .map { $0.quantity.doubleValue(for: bpm) }
+            guard !vals.isEmpty else { return nil }
+            return ((vals.reduce(0, +) / Double(vals.count)) * 10).rounded() / 10
+        }
+
+        let meter = HKUnit.meter()
+        var splits: [RunSplit] = []
+        var kmIndex = 1
+        var distInKm = 0.0              // metres accumulated in the current km
+        var splitStart = workout.startDate
+
+        for s in distSamples {
+            let d = s.quantity.doubleValue(for: meter)
+            if d <= 0 { continue }
+            let segDur = s.endDate.timeIntervalSince(s.startDate)
+            var consumed = 0.0
+            // one sample may straddle one or more km boundaries — interpolate
+            // the crossing time assuming distance accrues linearly in-sample.
+            while distInKm + (d - consumed) >= 1000.0 {
+                let need = 1000.0 - distInKm
+                let frac = (consumed + need) / d
+                let crossTime = s.startDate.addingTimeInterval(segDur * frac)
+                splits.append(RunSplit(km: Double(kmIndex), distance_m: 1000,
+                                       duration_s: crossTime.timeIntervalSince(splitStart),
+                                       avg_hr: avgHR(splitStart, crossTime)))
+                consumed += need
+                distInKm = 0
+                splitStart = crossTime
+                kmIndex += 1
+            }
+            distInKm += (d - consumed)
+        }
+        // trailing partial km (ignore sub-100 m GPS dribble)
+        if distInKm >= 100 {
+            splits.append(RunSplit(km: Double(kmIndex), distance_m: (distInKm).rounded(),
+                                   duration_s: workout.endDate.timeIntervalSince(splitStart),
+                                   avg_hr: avgHR(splitStart, workout.endDate)))
+        }
+        return splits
     }
 
     private func payload(from w: HKWorkout) -> RunPayload {
@@ -315,12 +388,17 @@ final class HealthKitService {
                 .averageQuantity() != nil
             let elev = w.metadata?[HKMetadataKeyElevationAscended] != nil
             let indoor = (w.metadata?[HKMetadataKeyIndoorWorkout] as? Bool) ?? false
+            // M7 Phase 4: how many per-km splits we can reconstruct, and whether
+            // they carry HR — the empirical coverage check the engine relies on.
+            let sp = await fetchSplits(for: w)
+            let spHR = sp.contains { $0.avg_hr != nil }
             let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
             lines.append(
                 "\(df.string(from: w.startDate))  src=\(w.sourceRevision.source.name)"
                 + "  dist=\(dist.map { String(format: "%.2fkm", $0 / 1000) } ?? "✗")"
                 + "  hr=\(hr ? "✓" : "✗")"
                 + "  elev=\(elev ? "✓" : "✗")"
+                + "  splits=\(sp.count)\(sp.isEmpty ? "" : (spHR ? "(+hr)" : "(no hr)"))"
                 + (indoor ? "  [indoor]" : "")
             )
         }

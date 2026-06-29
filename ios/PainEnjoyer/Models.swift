@@ -3,6 +3,20 @@ import SwiftUI
 
 // MARK: - Wire models (match the PocketBase `runs` schema)
 
+/// One kilometre of a run (or the trailing partial), reconstructed from the
+/// per-sample HealthKit distance + heart-rate series. Feeds the M7 Phase 4
+/// durability score (late-run pace decay / HR drift). avg_hr is nil when the
+/// source app wrote no heart-rate samples.
+struct RunSplit: Codable, Hashable {
+    // All Double?: PocketBase stores numbers as float64 and may serialize them
+    // as int or float — decoding to Int is brittle ("isn't in the correct
+    // format"). Doubles accept either.
+    var km: Double?
+    var distance_m: Double?
+    var duration_s: Double?
+    var avg_hr: Double?
+}
+
 /// Payload the phone sends when uploading a run.
 struct RunPayload: Codable {
     var date: String
@@ -12,6 +26,7 @@ struct RunPayload: Codable {
     var elevation_gain_m: Double?
     var source_app: String
     var healthkit_uuid: String
+    var splits: [RunSplit]? = nil // M7 Phase 4: per-km splits when the data supports it
 }
 
 /// A run record as stored on the server.
@@ -24,7 +39,16 @@ struct RunRecord: Codable, Identifiable, Hashable {
     var elevation_gain_m: Double?
     var source_app: String?
     var notes: String? // M3: athlete's subjective note, feeds the coach
+    var effort: Double? // M7 Phase 1: perceived effort/RPE 1–5; Double tolerates PB int-or-float
+    var coach_note: String? // M7: the coach's reaction to THIS run (not in chat)
+    var splits: [RunSplit]? // M7 Phase 4: per-km splits (may be absent/empty)
     var healthkit_uuid: String? // M6: route lookup for the map
+
+    /// 1–5 if the athlete rated this run's effort, else nil (PB stores unrated as 0).
+    var effortRating: Int? {
+        guard let e = effort, e >= 1 else { return nil }
+        return Int(e.rounded())
+    }
 
     // PB dates look like "2026-06-11 07:30:00.000Z"
     static let pbDateFormatter: DateFormatter = {
@@ -295,8 +319,18 @@ struct EngineState: Codable {
         var zones: [String: String]?
         var zones_sec: [String: Double]? // raw sec/km — run classification
     }
+    struct GoalTrajectory: Codable { // M7 Phase 5
+        var available: Bool
+        var required_vdot: Double?
+        var current_vdot: Double?
+        var trend_per_month: Double?
+        var projected_vdot: Double?
+        var weeks_to_race: Double? // Double: tolerate int-or-float serialization
+        var status: String? // on_track | borderline | off_track
+    }
     var traffic_light: TrafficLight
     var vdot: Vdot
+    var goal_trajectory: GoalTrajectory? // M7 Phase 5
     var for_llm: [String: String]?
 }
 

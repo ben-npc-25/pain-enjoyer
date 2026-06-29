@@ -181,6 +181,21 @@ final class PocketBaseClient {
                           body: Notes(notes: notes))
     }
 
+    /// M7 Phase 1: persist the athlete's per-run effort (RPE 1–5).
+    func updateRunEffort(id: String, effort: Int) async throws {
+        struct Effort: Encodable { let effort: Int }
+        try await request("/api/collections/runs/records/\(id)", method: "PATCH",
+                          body: Effort(effort: effort))
+    }
+
+    /// M7: ask the coach to react to the latest run. The reply is saved on the
+    /// run server-side (coach_note) and returned — it does NOT enter the chat.
+    func runFeedback() async throws -> String {
+        struct R: Decodable { let coach_note: String }
+        let data = try await request("/api/coach/run-feedback")
+        return try JSONDecoder().decode(R.self, from: data).coach_note
+    }
+
     // MARK: M6 — plan weeks + trends review
 
     func listPlanWeeks() async throws -> [PlanWeek] {

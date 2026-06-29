@@ -17,6 +17,7 @@ struct PlanView: View {
                             .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
                     }
                     raceCard
+                    trajectoryCard
                     if let vdot = model.engine?.vdot.value { predictorCard(vdot) }
                     weeksSection
                 }
@@ -29,7 +30,7 @@ struct PlanView: View {
                     Task { await model.generatePlan() }
                 } label: {
                     if model.busy { ProgressView() }
-                    else { Label("Plan next week", systemImage: "calendar.badge.plus") }
+                    else { Label("Update plan", systemImage: "calendar.badge.plus") }
                 }
                 .disabled(model.busy)
             }
@@ -39,6 +40,37 @@ struct PlanView: View {
                     Task { await model.saveProfile(updated) }
                 }
             }
+        }
+    }
+
+    // MARK: M7 Phase 5 — goal trajectory (required vs projected VDOT)
+
+    @ViewBuilder
+    private var trajectoryCard: some View {
+        if let gt = model.engine?.goal_trajectory, gt.available,
+           let req = gt.required_vdot, let cur = gt.current_vdot,
+           let proj = gt.projected_vdot, let trend = gt.trend_per_month,
+           let status = gt.status {
+            let color: Color = status == "on_track" ? .green
+                             : status == "off_track" ? .red : .orange
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("GOAL TRAJECTORY", systemImage: "target")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(status.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(color.opacity(0.2)))
+                        .foregroundStyle(color)
+                }
+                Text(String(format: "Needs VDOT %.1f — currently %.1f, trending %+.1f/mo", req, cur, trend))
+                    .font(.subheadline)
+                Text(String(format: "Projected %.1f by race day", proj))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardStyle()
         }
     }
 
@@ -168,7 +200,7 @@ struct PlanView: View {
         if weeks.isEmpty {
             VStack(spacing: 8) {
                 Text("No plan yet").font(.headline)
-                Text("Tap “Plan next week” and the coach builds one inside your VDOT zones and load cap.")
+                Text("Tap “Update plan” and the coach builds the rest of this week inside your VDOT zones and load cap.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }

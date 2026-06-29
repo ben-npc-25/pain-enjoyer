@@ -1,0 +1,143 @@
+# M7 — Training Decision Engine (mid-week adaptation + durability)
+
+> Drop this file in the repo root next to PLAN.md. In Claude Code:
+> "Read CLAUDE.md, PLAN.md, then implement M7-DECISION-ENGINE.md phase by phase."
+>
+> Origin: gap analysis of Ben's real coaching-conversation workflow vs. the shipped
+> M0–M6 system. Core finding: the app regenerates plans weekly, but Ben's actual
+> interaction loop is per-run — "I did this, how should the plan change now?"
+> Everything below preserves PLAN.md §1: **code computes, the LLM judges.**
+
+## What is explicitly NOT in scope
+
+- No manual run-log screen (HealthKit already captures distance/pace — a manual
+  3-field log would be a regression).
+- No generic daily check-in buttons (removed in M6 as cheap; do not resurrect).
+- No LLM-estimated fitness/durability/probability numbers — all new metrics are
+  engine math; the LLM only narrates them.
+
+## Phase 1 — Per-run feel (the one field HealthKit can't provide)
+
+The third field of Ben's natural log ("how did it feel") as structured data
+attached to the run, distinct from free-text notes.
+
+- Migration: `runs.feel` int nullable, 1–5 (1 = terrible … 5 = great).
+  Keep `runs.notes` as-is (subjective detail stays LLM territory).
+- iOS: in RunDetailView, a 5-segment feel picker above the notes editor.
+  When a fresh run syncs (run date == today) and `feel` is null, the run card
+  on the home screen shows the picker inline — one tap, no sheet.
+- Server: `feel` rides along with notes in all advise/chat/plan prompts as a
+  pre-formatted string ("felt: 4/5"), never a bare number (gotcha #4).
+- Engine: expose `last_run_feel` in state; no scoring logic yet (Phase 2 uses it).
+
+Exit test: tap feel on a run → value persists in PB → appears in the next
+chat prompt (verify with `LLM_PROVIDER=mock` + prompt logging).
+
+## Phase 2 — Mid-week re-plan (the core of M7)
+
+Trigger: a run syncs and reconciles against a planned workout, OR a planned
+workout flips to `skipped`. Decide deterministically whether the *remainder of
+this week* needs adjustment; only then spend an LLM call.
+
+- `plan.replanRemainder(app, state, trigger)` in plan.js:
+  - **Code decides IF**: replan only when one of these fires —
+    (a) planned workout skipped and ≥2 non-rest days remain this week;
+    (b) completed run deviates >25% in distance from plan;
+    (c) `feel ≤ 2` on a quality day (T/I/R/MP);
+    (d) `feel = 5` on a quality day AND light is 🟢 AND week is under cap.
+    Otherwise: log "no replan needed" and stop. Quiet is fine; ghosting isn't —
+    reuse the M5 logging pattern.
+  - **Code decides the rails**: remaining-week km cap = weeklyCapKm minus km
+    already done; injured → everything rest; 🔴 → no quality remaining; only
+    future days of the current week may change; race day immovable.
+  - **LLM decides**: which remaining days change and how to phrase it. Same
+    sanitizer/repair path as plan-week (repairs logged into rationale).
+  - Changed workouts get `status: modified`, original preserved in description
+    (same convention as pullTodayIfRed).
+- Wire the trigger into the existing reconcile path in main.pb.js (morning cron
+  + on-sync), not a new cron. One replan max per day (cost-conscious).
+- Coach message of kind `plan_change` explaining what moved and why — the
+  "Let's increase Saturday from 14 to 16km" interaction, but rail-bounded.
+- iOS: modified workouts already render; ensure the plan_change message surfaces
+  in chat on next open.
+
+Exit test (offline, mock LLM): fixture week + simulated easy-feeling threshold
+run under 🟢 → Saturday LR grows within cap; simulated skipped workout →
+remaining days reshuffle; 🔴 fixture → replan produces no quality days.
+Add to `test-engine-local.sh`.
+
+## Phase 3 — Distance-based workout rail
+
+Ben's stated preference: never count minutes or reps of time. Make it a rail,
+not a prompt suggestion.
+
+- Planner + replan prompts: interval/repetition workouts MUST be prescribed as
+  distance reps (e.g. "6 × 600m", "3 × 2km"), never time-based.
+- Sanitizer: regex-detect time-based prescriptions ("min", "minute", "'", "sec")
+  in I/R/T descriptions; convert using zones_sec (rep duration × zone pace →
+  round to nearest 100m) and log the repair into the rationale.
+
+Exit test: deliberately time-based mock LLM fixture → sanitizer emits
+distance-based description; fixture added to test-engine-local.sh.
+
+## Phase 4 — Durability score (engine math; the 30km-fade limiter)
+
+`runs.splits` exists in the schema but engine.js never reads it. Ben's known
+limiter is late-race fade/cramping — make it measurable.
+
+- engine.js additions, computed over long runs (≥15km) in the last 90d:
+  - **pace decay**: 2nd-half avg pace vs 1st-half, from splits (skip runs
+    without splits — the M1 audit found Runkeeper writes distance+HR; verify
+    splits coverage empirically first and degrade gracefully to halves-by-
+    cumulative-distance if per-km splits are absent).
+  - **HR drift**: 2nd-half avg HR vs 1st-half at comparable pace (aerobic
+    decoupling proxy). Requires per-split HR; if unavailable, omit — never
+    estimate.
+  - **durability 0–100**: 100 minus weighted decay+drift penalties; flag 🟡
+    when decay >5% on multiple recent long runs.
+- Surface in `for_llm` (pre-formatted strings) and as a Trends chart
+  (per-long-run decay %, with the score in the chart commentary facts).
+- Heat: if HKWorkoutMetadata temperature is present on the workout, sync it to
+  a new `runs.temp_c` field and have the engine annotate decay readings taken
+  above 25°C ("expected in heat — judge by effort"). If Runkeeper doesn't
+  write it (likely), the field stays null and nothing breaks — check the field
+  audit output before building UI around it.
+
+Exit test: hand-computed fixture (synthetic splits with known 6% decay) →
+engine returns expected decay + flag; 14/14 → N/N in test-engine-local.sh.
+
+## Phase 5 — Goal trajectory (deterministic "can I break 3:10?")
+
+- engine.js: from goal race time + distance → required VDOT (Daniels–Gilbert
+  inverse, already have the forward math in Models.swift — port to engine).
+- Trajectory: linear fit of effort-VDOT over the last 120d of quality efforts
+  → projected VDOT at race date → status `on_track | borderline | off_track`
+  (borderline = within ±1 VDOT point).
+- Surface: Plan tab header ("needs 51.2 — currently 47.7, trending +0.4/mo →
+  borderline") + `for_llm` strings so the coach narrates honestly. No
+  percentage probabilities — a trend + gap is honest; "73% chance of sub-3:10"
+  would be false precision.
+
+Exit test: fixtures for clearly-on-track and clearly-off-track histories.
+
+## Phase 6 — Return-to-run rail (current reality: Ben is injured)
+
+More urgent than anything above on the calendar, smallest in code.
+
+- profile gains `return_to_run_date` (nullable). While injured OR within 4
+  weeks of that date, weeklyCapKm follows a graduated ramp: wk1 = 30% of
+  pre-injury chronic, +20%/wk after, all-easy (no quality) for the first 2
+  weeks regardless of what the LLM proposes — sanitizer enforces.
+- Persona note: post-injury tone — 🟢 light does not mean "push" during the
+  ramp window.
+
+Exit test: injured-recently fixture → generated week is short + quality-free
+even with a rail-breaking mock response.
+
+## Ordering & deploy
+
+Phases are independent except 2 depends on 1 (feel as trigger input). Suggested
+order given the injury: **6 → 1 → 2 → 4 → 3 → 5.** Each phase: migration (if
+any) → hooks → fixtures in test-engine-local.sh → iOS → Ben runs
+`./scripts/deploy-server.sh ben@192.168.1.236` + Xcode install. All offline-
+testable via LLM_PROVIDER=mock per house rules; destructive infra stays Ben's.

@@ -78,9 +78,10 @@ function geminiGenerate(persona, prompt) {
 function claudeGenerate(tier, persona, prompt) {
   const key = $os.getenv("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
-  // Two-tier design: cheap fast model daily, stronger model for weekly plans.
+  // Two-tier design: cheap fast model for daily check-ins, stronger model for
+  // the weekly plan and mid-week re-plan (both judgment-heavy).
   const model =
-    tier === "weekly"
+    tier === "weekly" || tier === "replan"
       ? $os.getenv("CLAUDE_MODEL_WEEKLY") || "claude-sonnet-4-6"
       : $os.getenv("CLAUDE_MODEL_DAILY") || "claude-haiku-4-5";
 
@@ -140,6 +141,11 @@ module.exports = {
   parseJSONLoose: parseJSONLoose,
   provider: () => $os.getenv("LLM_PROVIDER") || "gemini",
   generate: function (tier, persona, prompt) {
+    // Opt-in prompt logging (LLM_LOG_PROMPT=1) — lets the offline smoke test
+    // assert that facts like per-run feel actually reach the model.
+    if ($os.getenv("LLM_LOG_PROMPT")) {
+      console.log("LLM PROMPT[" + tier + "]: " + String(prompt));
+    }
     const p = $os.getenv("LLM_PROVIDER") || "gemini";
     if (p === "claude") return claudeGenerate(tier, persona, prompt);
     if (p === "gemini") return geminiGenerate(persona, prompt);

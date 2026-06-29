@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Weekly app re-sign (free Apple account, 7-day profiles). Twice a week so
-     one missed run (phone away, Mac asleep) never strands the app.
-     Install:  cp scripts/com.benng.painenjoyer.refresh.plist ~/Library/LaunchAgents/
-               launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benng.painenjoyer.refresh.plist -->
+<!-- App re-sign for the free Apple account (7-day provisioning profiles).
+
+     The old Sun/Wed 21:00 StartCalendarInterval NEVER fired (runs=0): the Mac
+     was asleep at those times and launchd doesn't reliably run missed calendar
+     jobs. This version instead fires OFTEN — at login (RunAtLoad) and every 4 h
+     the Mac is awake (StartInterval) — and the script is a cheap no-op unless a
+     re-sign is actually due (≥5 days old). Frequent firing + a 2-day buffer
+     before the 7-day expiry means it self-heals whenever the Mac is awake and
+     the phone is reachable, with no fixed schedule to miss.
+
+     Install / reload:
+       cp scripts/com.benng.painenjoyer.refresh.plist ~/Library/LaunchAgents/
+       launchctl bootout  gui/$(id -u)/com.benng.painenjoyer.refresh 2>/dev/null
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benng.painenjoyer.refresh.plist -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -13,24 +23,17 @@
         <string>/bin/bash</string>
         <string>/Users/ben.ng/Documents/github/pain-enjoyer/scripts/refresh-app.sh</string>
     </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Weekday</key><integer>0</integer>
-            <key>Hour</key><integer>21</integer>
-            <key>Minute</key><integer>0</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>3</integer>
-            <key>Hour</key><integer>21</integer>
-            <key>Minute</key><integer>0</integer>
-        </dict>
-    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>14400</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/Users/ben.ng/Library/Logs/pain-enjoyer-refresh.log</string>
     <key>StandardErrorPath</key>
     <string>/Users/ben.ng/Library/Logs/pain-enjoyer-refresh.log</string>
-    <key>RunAtLoad</key>
-    <false/>
 </dict>
 </plist>

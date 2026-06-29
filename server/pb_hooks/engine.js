@@ -117,6 +117,7 @@ function loadRuns(app, now, days) {
       distM: distM,
       durS: durS,
       avgHr: r.getFloat("avg_hr") || null,
+      effort: r.getFloat("effort") || null, // M7 Phase 1: RPE 1–5, null if unrated
     });
   }
   return runs; // newest first
@@ -158,6 +159,75 @@ function loadProfile(app) {
     injury_note: p.getString("injury_note") || null,
     return_to_run_date: p.getString("return_to_run_date") || null,
     hr_max: p.getFloat("hr_max") || null,
+  };
+}
+
+// ── return-to-run ramp (M7 Phase 6) ─────────────────────────────────────
+// A graduated comeback after injury. The recent ACWR chronic has decayed
+// toward zero while hurt, so the ramp scales off a longer-memory baseline:
+// the peak 28-day rolling weekly volume over the last 180 days ("pre-injury
+// chronic"). The week containing return_to_run_date is ramp week 1; the
+// window is 4 weeks. All engine math — the LLM only narrates it.
+
+const RAMP_FACTORS = [0.3, 0.5, 0.7, 0.9]; // wk1 30% of baseline, +20%/wk after
+
+// M7 Phase 1: effort (RPE) → pre-formatted string (gotcha #4 — never bare).
+const EFFORT_LABELS = { 1: "very easy", 2: "easy", 3: "moderate", 4: "hard", 5: "max" };
+function effortString(n) {
+  const r = Math.round(n || 0);
+  if (r < 1 || r > 5) return null;
+  return r + "/5 (" + EFFORT_LABELS[r] + ")";
+}
+
+function mondayOf(d) {
+  const u = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const back = (u.getUTCDay() + 6) % 7; // 0 Sun..6 Sat → days back to Monday
+  return new Date(u.getTime() - back * 86400000);
+}
+
+// Established weekly volume that survives a training gap: the peak 28-day
+// rolling average over the last 180 days. round(,1) for display parity.
+function chronicBaselineKm(runs, now) {
+  const DAYS = 180;
+  const daily = new Array(DAYS).fill(0);
+  for (const r of runs) {
+    const d = daysAgo(r.date, now);
+    if (d >= 0 && d < DAYS) daily[d] += r.distM / 1000;
+  }
+  let best = 0, windowSum = 0;
+  for (let i = 0; i < DAYS; i++) {
+    windowSum += daily[i];
+    if (i >= 28) windowSum -= daily[i - 28];
+    if (i >= 27 && windowSum / 4 > best) best = windowSum / 4; // full 28-day window
+  }
+  return round(best, 1);
+}
+
+// Which ramp week (1..4) `ref` (a Date) falls in, or null if outside the
+// 4-week post-return window / no return date set.
+function returnRampWeek(profile, ref) {
+  if (!profile || !profile.return_to_run_date) return null;
+  const rd = parseDate(profile.return_to_run_date);
+  if (isNaN(rd.getTime())) return null;
+  const weeksSince = Math.round(
+    (mondayOf(ref).getTime() - mondayOf(rd).getTime()) / (7 * 86400000)
+  );
+  if (weeksSince < 0 || weeksSince > 3) return null;
+  return weeksSince + 1;
+}
+
+// The ramp's rails for the week `ref` falls in, or null when not ramping.
+// Single source of truth shared by forLLM (daily advice) and plan.js
+// (next-week generation) so the cap + no-quality rule never drift.
+function returnRampPlan(profile, ref, baselineKm) {
+  const week = returnRampWeek(profile, ref);
+  if (!week) return null;
+  return {
+    week: week,
+    of: RAMP_FACTORS.length,
+    no_quality: week <= 2, // all-easy for the first 2 weeks regardless of light
+    cap_km: Math.max(0, Math.round((baselineKm || 0) * RAMP_FACTORS[week - 1])),
+    baseline_km: round(baselineKm || 0, 1),
   };
 }
 
@@ -366,6 +436,81 @@ function computeIntensity(runs, profile, now) {
   };
 }
 
+// ── goal trajectory (M7 Phase 5) ──────────────────────────────────────────
+// Deterministic "can I hit my goal?" — no probabilities, just a gap + a trend.
+// required VDOT = the forward Daniels–Gilbert math (vdotForEffort) applied to
+// the goal race; trend = linear fit of best-effort VDOT over 120d, projected to
+// race day. Status is honest: on_track / borderline (±1 VDOT) / off_track.
+
+function raceDistanceM(profile) {
+  const n = String(profile.race_name || "").toLowerCase();
+  if (/half|21\.1|21\s?k/.test(n)) return 21097.5;
+  if (/10\s?k/.test(n)) return 10000;
+  if (/5\s?k/.test(n)) return 5000;
+  // marathon coach: anything else (incl. "marathon"/"full"/blank) is the full
+  return 42195;
+}
+
+function computeTrajectory(runs, profile, now, vdot) {
+  if (!profile || !profile.race_date || !profile.goal_time_s) {
+    return { available: false, reason: "no race goal set (need a race date and goal time)" };
+  }
+  const race = parseDate(profile.race_date);
+  const daysToRace = Math.round((race.getTime() - now.getTime()) / 86400000);
+  if (daysToRace <= 0) return { available: false, reason: "race date is in the past" };
+
+  const distM = raceDistanceM(profile);
+  const requiredVdot = round(vdotForEffort(distM, profile.goal_time_s), 1);
+
+  // Best-effort VDOT per 14-day bucket over the last 120d — bucket-max filters
+  // out easy-run noise so the fit tracks fitness, not training mix.
+  const WINDOW = 120, BUCKET = 14, MIN_M = 3000, MIN_S = 720;
+  const buckets = {};
+  for (const r of runs) {
+    const da = daysAgo(r.date, now);
+    if (da < 0 || da > WINDOW || r.distM < MIN_M || r.durS < MIN_S) continue;
+    const v = vdotForEffort(r.distM, r.durS);
+    const idx = Math.floor(da / BUCKET);
+    if (!buckets[idx] || v > buckets[idx].v) buckets[idx] = { v: v, daysAgo: da };
+  }
+  const pts = Object.keys(buckets).map((k) => ({ x: -buckets[k].daysAgo, y: buckets[k].v }));
+  if (pts.length < 2) {
+    return { available: false, reason: "not enough quality efforts in the last 120 days to project a trend" };
+  }
+
+  // least-squares slope (VDOT per day); x = -daysAgo so time increases with x
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
+  const n = pts.length, denom = n * sxx - sx * sx;
+  const slope = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
+
+  // Trend clamped to a plausible ±2 VDOT/month — a short window's raw slope
+  // extrapolated months out otherwise produces absurd projections.
+  let trendPerMonth = round(slope * 30, 1);
+  if (trendPerMonth > 2) trendPerMonth = 2;
+  if (trendPerMonth < -2) trendPerMonth = -2;
+
+  const currentVdot = vdot && vdot.available ? vdot.value : round((sy - slope * sx) / n, 1);
+  const projectedVdot = round(currentVdot + trendPerMonth * (daysToRace / 30), 1);
+  const diff = round(projectedVdot - requiredVdot, 1);
+  const status = diff > 1 ? "on_track" : diff < -1 ? "off_track" : "borderline";
+  const weeks = Math.round(daysToRace / 7);
+
+  return {
+    available: true,
+    required_vdot: requiredVdot,
+    current_vdot: currentVdot,
+    trend_per_month: trendPerMonth,
+    projected_vdot: projectedVdot,
+    weeks_to_race: weeks,
+    status: status,
+    summary:
+      "needs VDOT " + requiredVdot + " for the goal; currently " + currentVdot +
+      ", trending " + (trendPerMonth >= 0 ? "+" : "") + trendPerMonth + "/mo → projected " +
+      projectedVdot + " by race day (" + weeks + " wks) — " + status.replace("_", " "),
+  };
+}
+
 // ── traffic light ───────────────────────────────────────────────────────
 // Worst severity wins; ALL triggered reasons are reported so the LLM can
 // explain the full picture, not just the loudest signal.
@@ -378,16 +523,10 @@ function computeTrafficLight(profile, vdot, acwr, recovery, intensity, lastRunDa
     if (level > severity) severity = level;
   }
 
-  if (profile && profile.injured) {
-    flag(2,
-      "athlete is marked INJURED" +
-        (profile.return_to_run_date
-          ? " (target return " + String(profile.return_to_run_date).slice(0, 10) + ")"
-          : "") +
-        (profile.injury_note ? " — " + profile.injury_note : "") +
-        " — no running load until cleared"
-    );
-  }
+  // M7: injury is intentionally NOT a traffic-light driver anymore — it's a
+  // minor, contextual signal the coach weighs (surfaced via athlete_status),
+  // not a hard rail that pins the light red. The light reflects load, recovery,
+  // and intensity; the LLM decides how much the noted injury should matter.
 
   if (acwr.state === "no_base") {
     flag(1, "not enough recent history to judge training load");
@@ -462,6 +601,13 @@ function computeEngineState(app) {
     profile, vdot, acwr, recovery, intensity, lastRunDaysAgo
   );
 
+  // M7 Phase 6: pre-injury baseline + this-moment return-to-run ramp state.
+  const chronicBaseline = chronicBaselineKm(runs, now);
+  const returnRamp = returnRampPlan(profile, now, chronicBaseline);
+
+  // M7 Phase 5: goal trajectory (required vs projected VDOT).
+  const trajectory = computeTrajectory(runs, profile, now, vdot);
+
   return {
     computed_at: now.toISOString(),
     profile: profile,
@@ -470,6 +616,10 @@ function computeEngineState(app) {
     recovery: recovery,
     intensity: intensity,
     history: history,
+    last_run_effort: lastRun && lastRun.effort ? lastRun.effort : null, // M7 Phase 1
+    chronic_baseline_km: chronicBaseline,
+    return_ramp: returnRamp, // null unless actively ramping back
+    goal_trajectory: trajectory, // M7 Phase 5
     traffic_light: trafficLight,
   };
 }
@@ -501,6 +651,9 @@ function forLLM(state) {
       ", interval " + state.vdot.zones.interval +
       ", repetition " + state.vdot.zones.repetition;
   }
+  if (state.last_run_effort) {
+    f.last_run_effort = "athlete rated the most recent run's effort " + effortString(state.last_run_effort);
+  }
   f.recovery = state.recovery.available ? state.recovery.summary : "unknown — " + state.recovery.reason;
   f.intensity_8020 = state.intensity.available ? state.intensity.summary : "unknown — " + state.intensity.reason;
   if (state.profile) {
@@ -516,6 +669,20 @@ function forLLM(state) {
         (state.profile.race_name || "race") +
         (state.profile.race_date ? " on " + String(state.profile.race_date).slice(0, 10) : "");
     }
+  }
+  if (state.goal_trajectory && state.goal_trajectory.available) {
+    f.goal_trajectory = state.goal_trajectory.summary;
+  }
+  if (state.return_ramp) {
+    const r = state.return_ramp;
+    f.return_to_run =
+      "post-injury comeback ramp — week " + r.week + " of " + r.of +
+      ", volume capped at " + fmtKm(r.cap_km) + " this week (off a " +
+      fmtKm(r.baseline_km) + "/wk pre-injury baseline)" +
+      (r.no_quality
+        ? "; EASY RUNNING ONLY, no quality (no tempo/interval/rep/marathon-pace) yet"
+        : "; easy-biased, ease quality back in") +
+      ". A 🟢 light here does NOT mean push — respect the ramp.";
   }
   return f;
 }
@@ -565,7 +732,10 @@ module.exports = {
   computeEngineState: computeEngineState,
   forLLM: forLLM,
   trendFacts: trendFacts,
+  returnRampPlan: returnRampPlan, // M7 Phase 6: shared by plan.js
   // exposed for the smoke test
   _vdotForEffort: vdotForEffort,
   _paceSecPerKmForFraction: paceSecPerKmForFraction,
+  _chronicBaselineKm: chronicBaselineKm,
+  _returnRampWeek: returnRampWeek,
 };

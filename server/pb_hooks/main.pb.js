@@ -87,6 +87,14 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
       console.log("reconcile: " + rec.done + " done, " + rec.skipped + " skipped");
     }
 
+    // M7 Phase 2: settling done/skipped (or a skip) may warrant a mid-week
+    // re-plan of the remainder. Code decides IF; the LLM only runs if so.
+    try {
+      plan.replanRemainder($app, llm, persona, engine, coach, {});
+    } catch (err) {
+      console.log("replan failed (advice continues):", String(err));
+    }
+
     const facts = coach.latestRunFacts($app);
     if (!facts) return; // nothing synced yet — stay quiet
 
@@ -142,6 +150,61 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
     console.log("morning-coach failed:", String(err));
   }
 });
+
+// ── M7 Phase 2: on-sync mid-week re-plan ───────────────────────────────
+// A freshly synced run for the CURRENT week settles the plan (done/skipped)
+// and may trigger a deterministic re-plan of the remainder. Historical
+// backfill runs (older than this week) are ignored so a first-sync flood
+// can't churn the plan. One LLM-spending replan per day (guarded in plan.js).
+
+onRecordAfterCreateSuccess((e) => {
+  try {
+    const runDate = String(e.record.getString("date")).slice(0, 10);
+    const now = new Date();
+    const m = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    m.setUTCDate(m.getUTCDate() - ((m.getUTCDay() + 6) % 7)); // this week's Monday
+    if (runDate >= m.toISOString().slice(0, 10)) {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const engine = require(`${__hooks}/engine.js`);
+      const coach = require(`${__hooks}/coach.js`);
+      const plan = require(`${__hooks}/plan.js`);
+      plan.reconcile(e.app);
+      plan.replanRemainder(e.app, llm, persona, engine, coach, {});
+    }
+  } catch (err) {
+    console.log("on-sync replan failed (run still saved):", String(err));
+  }
+  e.next();
+}, "runs");
+
+// ── POST /api/coach/replan ─────────────────────────────────────────────
+// M7 Phase 2: manually trigger a mid-week re-plan (the app's "re-plan now"
+// and the offline test use this). ?force=1 bypasses the once-per-day guard.
+
+routerAdd(
+  "POST",
+  "/api/coach/replan",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const engine = require(`${__hooks}/engine.js`);
+      const coach = require(`${__hooks}/coach.js`);
+      const plan = require(`${__hooks}/plan.js`);
+      plan.reconcile(e.app);
+      const force = e.request.url.query().get("force") === "1";
+      const today = e.request.url.query().get("today") || null; // test seam
+      return e.json(200, plan.replanRemainder(e.app, llm, persona, engine, coach, { force: force, today: today }));
+    } catch (err) {
+      console.log("replan failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
 
 // ── POST /api/coach/trends-review ──────────────────────────────────────
 // M6: on-demand coach commentary for the Trends screen (kind weekly_review).
@@ -248,6 +311,48 @@ routerAdd(
   $apis.requireAuth()
 );
 
+// ── POST /api/coach/run-feedback ───────────────────────────────────────
+// M7: the coach reacts to the most recent run and the reply is saved ON that
+// run (runs.coach_note) — NOT posted to coach_messages, so it never lands in
+// the chat thread. The logged effort rides into the prompt, so the reaction
+// reflects how hard the athlete said it was.
+
+routerAdd(
+  "POST",
+  "/api/coach/run-feedback",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const coach = require(`${__hooks}/coach.js`);
+      const engine = require(`${__hooks}/engine.js`);
+
+      const facts = coach.latestRunFacts(e.app);
+      if (!facts) return e.json(400, { error: "no runs synced yet" });
+
+      const engineFacts = engine.forLLM(engine.computeEngineState(e.app));
+      const prompt =
+        coach.buildDailyPrompt(coach.profileFacts(e.app), facts, engineFacts) +
+        "\n\nThis is a PRIVATE note saved on THIS run (not a chat message). React " +
+        "to how this run went, weighing the effort the athlete logged. Keep it to " +
+        "2-3 sentences, specific to this run — no greeting, no sign-off.";
+      const note = llm.generate("daily", persona, prompt);
+
+      const runs = e.app.findRecordsByFilter("runs", "id != ''", "-date", 1, 0);
+      if (runs.length) {
+        runs[0].set("coach_note", note);
+        e.app.save(runs[0]);
+      }
+      return e.json(200, { coach_note: note });
+    } catch (err) {
+      console.log("run-feedback failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
 // ── POST /api/coach/chat ───────────────────────────────────────────────
 // M3: two-way conversation. Athlete message + coach reply both land in
 // coach_messages (role athlete|coach) — M4's coach_memory distills from here.
@@ -304,9 +409,15 @@ routerAdd(
     try {
       const llm = require(`${__hooks}/llm.js`);
       const memory = require(`${__hooks}/memory.js`);
-      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const coach = require(`${__hooks}/coach.js`);
       const engine = require(`${__hooks}/engine.js`);
       const plan = require(`${__hooks}/plan.js`);
+
+      // M7: feed what the athlete told the coach straight into the plan prompt
+      // so "tell the coach, then hit Plan" actually changes the plan. Durable
+      // facts still accrue via the daily distill cron + the memory block below.
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const convo = coach.conversationText(e.app, 8);
 
       let start = null;
       const q = e.request.url.query().get("start");
@@ -315,7 +426,7 @@ routerAdd(
         if (isNaN(start.getTime())) return e.json(400, { error: "bad start date" });
       }
       plan.reconcile(e.app); // settle the past before planning the future
-      const result = plan.generateWeek(e.app, llm, persona, engine, start);
+      const result = plan.generateWeek(e.app, llm, persona, engine, start, convo);
       return e.json(200, result);
     } catch (err) {
       console.log("plan-week failed:", String(err), err && err.stack ? String(err.stack) : "");
@@ -339,7 +450,9 @@ cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => 
     const coach = require(`${__hooks}/coach.js`);
 
     if (!coach.latestRunFacts($app)) return;
-    const result = plan.generateWeek($app, llm, persona, engine, null);
+    // Sunday cron plans the UPCOMING week (generateWeek now defaults to the
+    // current week, so pass next Monday explicitly).
+    const result = plan.generateWeek($app, llm, persona, engine, plan.nextMonday(new Date()), coach.conversationText($app, 8));
     coach.saveCoachMessage(
       $app, "plan_change",
       "New week planned (" + result.phase + ", " + result.week_start + "): " + result.rationale,

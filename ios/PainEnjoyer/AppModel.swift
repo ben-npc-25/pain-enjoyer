@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
 
     // M2: deterministic engine state + athlete profile
     @Published var engine: EngineState?
+    @Published var coachOnRunBusy = false // M7: coach reacting to a just-rated run
     @Published var profile: AthleteProfile?
     /// True once a profile fetch SUCCEEDED — distinguishes "no profile yet"
     /// (→ onboarding) from "couldn't reach the server".
@@ -255,11 +256,11 @@ final class AppModel: ObservableObject {
     func generatePlan() async {
         busy = true; defer { busy = false }
         do {
-            status = "Coach is planning next week…"
+            status = "Coach is updating your plan…"
             let pb = try await client()
             let week = try await pb.generateWeek()
             planned = (try? await pb.listPlanned()) ?? planned
-            status = "Planned week of \(week.week_start) (\(week.phase), cap \(Int(week.cap_km)) km)"
+            status = "Updated plan from \(week.week_start) (\(week.phase), cap \(Int(week.cap_km)) km)"
             haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"
@@ -275,6 +276,41 @@ final class AppModel: ObservableObject {
             }
             saveCache()
             status = "Note saved"
+            haptic()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    /// M7 Phase 1: save the per-run effort (RPE 1–5) — optimistic local update.
+    func saveEffort(for run: RunRecord, effort: Int) async {
+        do {
+            let pb = try await client()
+            try await pb.updateRunEffort(id: run.id, effort: effort)
+            if let i = runs.firstIndex(where: { $0.id == run.id }) {
+                runs[i].effort = Double(effort)
+            }
+            saveCache()
+            status = "Effort saved"
+            haptic()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
+    /// M7: rate the run's effort, then get the coach's reaction SAVED ON THE RUN
+    /// (not posted to chat). The effort rides into the prompt, so the note
+    /// reflects the feedback just given; it persists in runs[i].coach_note.
+    func rateRunAndGetFeedback(_ run: RunRecord, effort: Int) async {
+        await saveEffort(for: run, effort: effort)
+        coachOnRunBusy = true; defer { coachOnRunBusy = false }
+        do {
+            let pb = try await client()
+            let note = try await pb.runFeedback()
+            if let i = runs.firstIndex(where: { $0.id == run.id }) {
+                runs[i].coach_note = note
+            }
+            saveCache()
             haptic()
         } catch {
             status = "✗ \(error.localizedDescription)"

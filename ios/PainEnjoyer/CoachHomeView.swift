@@ -114,9 +114,12 @@ struct CoachHomeView: View {
     @ViewBuilder
     private var latestActivityCard: some View {
         if let run = model.runs.first {
+            VStack(spacing: 8) {
             NavigationLink {
                 RunDetailView(run: run, zones: model.zonesSec) { r, notes in
                     Task { await model.saveNotes(for: r, notes: notes) }
+                } onSaveEffort: { r, v in
+                    Task { await model.rateRunAndGetFeedback(r, effort: v) }
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
@@ -157,8 +160,48 @@ struct CoachHomeView: View {
             }
             .buttonStyle(.plain)
             .cardStyle()
+
+            // M7: quick feedback on the latest run + the coach's reaction,
+            // right on the card (no sheet, no navigation).
+            feedbackCard(run)
+            }
             .padding(.horizontal)
         }
+    }
+
+    private func feedbackCard(_ run: RunRecord) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(run.effortRating == nil ? "HOW HARD WAS IT?" : "EFFORT")
+                .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+            EffortPicker(current: run.effortRating) { v in
+                Task { await model.rateRunAndGetFeedback(run, effort: v) }
+            }
+            if let note = run.notes, !note.isEmpty {
+                Label(note, systemImage: "text.bubble").font(.caption).foregroundStyle(.secondary)
+            }
+
+            // The coach reacts to this run ONLY after you've logged your effort.
+            // The reaction is saved on the run (coach_note), not in the chat.
+            if run.effortRating != nil {
+                if model.coachOnRunBusy {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                        Text("Coach is looking at this run…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 2)
+                } else if let note = run.coach_note, !note.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("COACH ON THIS RUN", systemImage: "figure.run.circle.fill")
+                            .font(.caption2.weight(.bold)).foregroundStyle(Color.accentColor)
+                        CoachProse(text: note, font: .subheadline).lineLimit(8)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
     }
 
     // MARK: coach's tip for today (latest morning message)

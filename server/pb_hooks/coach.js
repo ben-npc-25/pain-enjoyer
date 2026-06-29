@@ -4,6 +4,15 @@
 // PocketBase executes routerAdd/cronAdd handlers in fresh JSVM instances,
 // so file-level functions in *.pb.js are not in scope at request time.
 
+// M7 Phase 1: effort (RPE) → a pre-formatted string the LLM sees (never a bare
+// number, gotcha #4). 1–5, anything else = no rating.
+const EFFORT_LABELS = { 1: "very easy", 2: "easy", 3: "moderate", 4: "hard", 5: "max" };
+function effortString(n) {
+  const r = Math.round(n || 0);
+  if (r < 1 || r > 5) return null;
+  return "effort " + r + "/5 (" + EFFORT_LABELS[r] + ")";
+}
+
 function latestRunFacts(app) {
   const runs = app.findRecordsByFilter("runs", "id != ''", "-date", 1, 0);
   if (runs.length === 0) return null;
@@ -32,6 +41,7 @@ function latestRunFacts(app) {
     elevation_gain_m: run.getFloat("elevation_gain_m") || null,
     source_app: run.getString("source_app") || null,
     athlete_notes: run.getString("notes") || null, // M3: subjective context
+    effort: effortString(run.getFloat("effort")), // M7 Phase 1: "effort 4/5 (hard)" or null
   };
 }
 
@@ -64,6 +74,16 @@ function buildChatPrompt(profile, engineFacts, history, runFacts, userMessage) {
     "\nThe athlete says: " + userMessage + "\n\n" +
     "Reply as their coach, in the conversation's flow — concise, specific, no headings."
   );
+}
+
+// M7: recent conversation as a plain transcript, for the plan prompt so the
+// planner honors what the athlete just asked for ("make Saturday longer").
+function conversationText(app, n) {
+  const msgs = recentMessages(app, n || 8);
+  if (!msgs.length) return "";
+  return msgs
+    .map(function (m) { return (m.role === "athlete" ? "Athlete: " : "Coach: ") + m.content; })
+    .join("\n");
 }
 
 function profileFacts(app) {
@@ -139,6 +159,7 @@ function saveAthleteMessage(app, content) {
 
 module.exports = {
   latestRunFacts,
+  conversationText,
   profileFacts,
   saveCoachMessage,
   saveAthleteMessage,

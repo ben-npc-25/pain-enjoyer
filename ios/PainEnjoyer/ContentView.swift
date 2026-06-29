@@ -97,6 +97,9 @@ struct CalendarTabView: View {
                     onSaveNotes: { run, notes in
                         Task { await model.saveNotes(for: run, notes: notes) }
                     },
+                    onSaveEffort: { run, v in
+                        Task { await model.rateRunAndGetFeedback(run, effort: v) }
+                    },
                     onAskCoach: { wo in
                         selectedDay = nil
                         model.openChat(prefill: String(
