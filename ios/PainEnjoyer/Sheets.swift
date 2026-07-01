@@ -285,6 +285,8 @@ struct SettingsSheet: View {
     @AppStorage("password") private var password = "" // POC — Keychain later
     @Environment(\.dismiss) private var dismiss
     @State private var testResult = ""
+    @State private var reimporting = false
+    @State private var backingUp = false
 
     var body: some View {
         NavigationStack {
@@ -314,6 +316,44 @@ struct SettingsSheet: View {
                     }
                 } footer: {
                     Text(testResult)
+                }
+                Section {
+                    Button {
+                        Task {
+                            reimporting = true; defer { reimporting = false }
+                            do {
+                                HealthKitService.shared.resetAnchor()
+                                let n = try await SyncEngine.shared.syncNow()
+                                testResult = n > 0 ? "✓ re-imported \(n) run\(n == 1 ? "" : "s")"
+                                                   : "✓ history already complete"
+                            } catch {
+                                testResult = "✗ \(error.localizedDescription)"
+                            }
+                        }
+                    } label: {
+                        if reimporting { ProgressView() }
+                        else { Text("Re-import all history") }
+                    }
+                    .disabled(reimporting)
+                    Button {
+                        Task {
+                            backingUp = true; defer { backingUp = false }
+                            do {
+                                guard let url = URL(string: serverURL) else { testResult = "✗ invalid URL"; return }
+                                let pb = PocketBaseClient(baseURL: url)
+                                try await pb.authenticate(email: email, password: password)
+                                let n = try await pb.backupToSheet()
+                                testResult = "✓ backed up \(n) run\(n == 1 ? "" : "s") to the sheet"
+                            } catch {
+                                testResult = "✗ \(error.localizedDescription)"
+                            }
+                        }
+                    } label: {
+                        if backingUp { ProgressView() } else { Text("Back up log to Sheet") }
+                    }
+                    .disabled(backingUp)
+                } footer: {
+                    Text("“Re-import” pulls your full Health history again (safe — duplicates skipped); use it if the coach isn't seeing your best efforts. “Back up” writes your whole log to the App Backup tab in your sheet (also runs nightly). Changes show after you close Settings.")
                 }
             }
             .navigationTitle("Settings")

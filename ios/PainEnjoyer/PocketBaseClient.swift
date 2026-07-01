@@ -196,6 +196,13 @@ final class PocketBaseClient {
         return try JSONDecoder().decode(R.self, from: data).coach_note
     }
 
+    /// M7: one-way export of the full log to the Google Sheet backup.
+    func backupToSheet() async throws -> Int {
+        struct R: Decodable { let backed_up: Int }
+        let data = try await request("/api/coach/backup-sheet")
+        return try JSONDecoder().decode(R.self, from: data).backed_up
+    }
+
     // MARK: M6 — plan weeks + trends review
 
     func listPlanWeeks() async throws -> [PlanWeek] {

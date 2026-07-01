@@ -46,8 +46,14 @@ function weeklyCapKm(state, profile, ramp) {
   // The return-to-run ramp (an explicit return date) still governs the cap.
   if (ramp) return ramp.cap_km; // M7 Phase 6: graduated return-to-run cap
   const chronic = state.acwr.chronic_weekly_km || 0;
-  if (chronic < 3) return 15; // no base — conservative starter volume
-  return Math.round(chronic * 1.15); // ≤ ~ACWR 1.15: inside the 0.8–1.3 sweet spot
+  // A short training gap shouldn't collapse the cap to the floor. Rebuild from
+  // the athlete's established base — the peak 28-day volume in the last 180d —
+  // not from a near-zero recent average. A long gap ages out of that 180d
+  // window and self-limits, so this stays safe.
+  const baseline = state.chronic_baseline_km || 0;
+  const effective = Math.max(chronic, baseline * 0.75);
+  if (effective < 3) return 15; // genuinely no base — conservative starter volume
+  return Math.round(effective * 1.15); // ≤ ~ACWR 1.15 off the established base
 }
 
 function pacesForType(type, zonesSec) {
@@ -115,32 +121,15 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
       : null,
   };
   return (
-    "Plan the athlete's training for the dates listed in week_dates below (this " +
-    "may be the rest of the current week, not a full 7 days). Today is " +
-    new Date().toISOString().slice(0, 10) + ".\n\n" +
-    "Deterministic engine state (all numbers pre-computed; do not recompute):\n" +
-    JSON.stringify(engineFacts) + "\n\n" +
-    (convo
-      ? "Recent conversation with the athlete — honor any explicit requests they " +
-        "made (e.g. 'make Saturday longer', 'I want more speedwork') wherever they " +
-        "fit inside the hard constraints below:\n" + convo + "\n\n"
-      : "") +
-    "Hard constraints (the server enforces these mechanically afterwards — " +
-    "violations get clamped, so plan inside them):\n" +
-    JSON.stringify(constraints) + "\n\n" +
-    "If athlete_injured is true: it's a noted niggle, not a stop sign — use your " +
-    "judgment (the engine facts carry the detail). Adjust intensity/volume if it " +
-    "seems wise, but you are not required to prescribe rest.\n\n" +
-    "If return_to_run is present: this is a graduated comeback from injury. The " +
-    "low distance cap is deliberate — do NOT exceed it, and a green light does " +
-    "NOT mean push. When easy_only is true, every running day must be easy (type " +
-    "E or LR) — no T/I/R/MP; the server forces this regardless.\n\n" +
-    "Interval/threshold/rep workouts MUST be prescribed as DISTANCE reps " +
-    "(e.g. \"6 × 600m\", \"3 × 2km\") — never time. Do not write minutes or " +
-    "seconds in any workout description; the server rewrites time to distance.\n\n" +
-    "Respond with STRICT JSON only (no markdown fences, no commentary):\n" +
-    '{"rationale":"2-4 sentences on the week\'s intent",' +
-    '"days":[{"date":"YYYY-MM-DD","type":"E|T|I|R|MP|LR|rest","distance_km":0,"description":"..."}]}' +
+    "Plan training for the dates in week_dates (may be the rest of this week, not 7 days). " +
+    "Today " + new Date().toISOString().slice(0, 10) + ".\n" +
+    "Engine facts (pre-computed; quote, don't recompute):\n" + JSON.stringify(engineFacts) + "\n" +
+    (convo ? "Recent chat — honor explicit requests that fit the constraints:\n" + convo + "\n" : "") +
+    "Constraints (server clamps violations):\n" + JSON.stringify(constraints) + "\n" +
+    "Rules: injured = a niggle to weigh, not forced rest. return_to_run = deliberate low cap, don't exceed, " +
+    "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds.\n" +
+    "STRICT JSON only, no fences:\n" +
+    '{"rationale":"2-4 sentences","days":[{"date":"YYYY-MM-DD","type":"E|T|I|R|MP|LR|rest","distance_km":0,"description":"..."}]}' +
     "\nExactly one entry per date in week_dates, in order. Workout paces are " +
     "NOT yours to choose — the server attaches pace targets from the VDOT zones."
   );

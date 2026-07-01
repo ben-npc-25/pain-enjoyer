@@ -164,14 +164,12 @@ onRecordAfterCreateSuccess((e) => {
     const m = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     m.setUTCDate(m.getUTCDate() - ((m.getUTCDay() + 6) % 7)); // this week's Monday
     if (runDate >= m.toISOString().slice(0, 10)) {
-      const llm = require(`${__hooks}/llm.js`);
-      const memory = require(`${__hooks}/memory.js`);
-      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
-      const engine = require(`${__hooks}/engine.js`);
-      const coach = require(`${__hooks}/coach.js`);
+      // Reconcile is cheap + deterministic (no LLM). The mid-week re-plan used
+      // to fire here too, but an LLM call on every synced run burns provider
+      // quota fast — it now runs once/day in the morning cron, or on demand via
+      // the "Update plan" button. Keep on-sync to settling the past.
       const plan = require(`${__hooks}/plan.js`);
       plan.reconcile(e.app);
-      plan.replanRemainder(e.app, llm, persona, engine, coach, {});
     }
   } catch (err) {
     console.log("on-sync replan failed (run still saved):", String(err));
@@ -310,6 +308,38 @@ routerAdd(
   },
   $apis.requireAuth()
 );
+
+// ── POST /api/coach/backup-sheet ───────────────────────────────────────
+// M7: one-way export of the full run log to Ben's Google Sheet (his durable,
+// readable safety net). Button-triggered; also runs nightly below.
+
+routerAdd(
+  "POST",
+  "/api/coach/backup-sheet",
+  (e) => {
+    try {
+      const backup = require(`${__hooks}/backup.js`);
+      const r = backup.pushToSheet(e.app);
+      if (r.skipped) return e.json(400, { error: r.reason });
+      return e.json(200, r);
+    } catch (err) {
+      console.log("backup-sheet failed:", String(err));
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
+// Nightly auto-backup (default 18:00 UTC) so the safety net isn't dependent on
+// remembering to tap the button. No-op when BACKUP_SHEET_URL isn't configured.
+cronAdd("sheet-backup", $os.getenv("COACH_BACKUP_CRON_UTC") || "0 18 * * *", () => {
+  try {
+    const r = require(`${__hooks}/backup.js`).pushToSheet($app);
+    if (!r.skipped) console.log("sheet-backup: " + r.backed_up + " rows");
+  } catch (err) {
+    console.log("sheet-backup failed:", String(err));
+  }
+});
 
 // ── POST /api/coach/run-feedback ───────────────────────────────────────
 // M7: the coach reacts to the most recent run and the reply is saved ON that

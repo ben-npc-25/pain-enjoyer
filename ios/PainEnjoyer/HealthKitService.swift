@@ -21,8 +21,10 @@ final class HealthKitService {
     static let shared = HealthKitService()
     private let store = HKHealthStore()
     private let anchorKey = "hk.workouts.anchor.v1"
-    /// Initial import window — bounds the very first sync (calendar + future VDOT).
-    private let seedDays = 180
+    /// Initial import window — bounds the very first sync (and re-import). A
+    /// year so the engine can anchor fitness to the athlete's best effort, not
+    /// just recent runs (the engine's VDOT reference also looks back a year).
+    private let seedDays = 365
 
     private init() {}
 
@@ -67,6 +69,11 @@ final class HealthKitService {
         else { return }
         UserDefaults.standard.set(data, forKey: anchorKey)
     }
+
+    /// Drop the saved anchor so the next sync re-imports the full window. The
+    /// server's unique index on healthkit_uuid makes re-uploads a safe no-op for
+    /// runs already stored. Used by "re-import all history".
+    func resetAnchor() { UserDefaults.standard.removeObject(forKey: anchorKey) }
 
     /// New running workouts since the last committed anchor.
     func fetchNewRuns() async throws -> (runs: [RunPayload], anchor: HKQueryAnchor?) {

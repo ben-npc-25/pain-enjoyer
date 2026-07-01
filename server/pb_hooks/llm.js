@@ -75,6 +75,11 @@ function geminiGenerate(persona, prompt) {
   throw lastErr;
 }
 
+// Output-token ceilings per tier — Claude bills output far higher than input,
+// and Ben pays out of pocket, so cap tight to what each response actually needs
+// (a daily check-in is 3–6 sentences; a 7-day plan is small JSON). Override-able.
+const CLAUDE_MAX_TOKENS = { daily: 480, weekly: 1100, replan: 700, distill: 480, trends: 560 };
+
 function claudeGenerate(tier, persona, prompt) {
   const key = $os.getenv("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
@@ -84,6 +89,7 @@ function claudeGenerate(tier, persona, prompt) {
     tier === "weekly" || tier === "replan"
       ? $os.getenv("CLAUDE_MODEL_WEEKLY") || "claude-sonnet-4-6"
       : $os.getenv("CLAUDE_MODEL_DAILY") || "claude-haiku-4-5";
+  const maxTokens = CLAUDE_MAX_TOKENS[tier] || 700;
 
   // Raw HTTP: PocketBase's JS hooks runtime (goja) has no Anthropic SDK.
   const res = $http.send({
@@ -96,7 +102,7 @@ function claudeGenerate(tier, persona, prompt) {
     },
     body: JSON.stringify({
       model: model,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       system: persona,
       messages: [{ role: "user", content: prompt }],
     }),

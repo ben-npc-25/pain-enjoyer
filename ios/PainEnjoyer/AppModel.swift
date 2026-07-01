@@ -116,16 +116,12 @@ final class AppModel: ObservableObject {
         return pb
     }
 
-    /// Full refresh: HealthKit → server → local mirror (+ latest coach message).
+    /// Full refresh. READ the server first so your saved data always shows —
+    /// even if a HealthKit sync is slow (e.g. a big re-import). The sync runs
+    /// AFTER, in the background, so it can never blank the screen again.
     func refresh(syncHealth: Bool = true) async {
         busy = true; defer { busy = false }
         do {
-            if syncHealth {
-                status = "Reading Health…"
-                try await HealthKitService.shared.requestAuthorization()
-                let n = try await SyncEngine.shared.syncNow()
-                if n > 0 { status = "Synced \(n) new run\(n == 1 ? "" : "s")" }
-            }
             status = status.isEmpty ? "Loading…" : status
             let pb = try await client()
             _ = try? await pb.ping() // M5: opens feed the engagement score
@@ -153,9 +149,30 @@ final class AppModel: ObservableObject {
                 profileLoaded = true
             } catch { /* unreachable/odd response — don't trigger onboarding */ }
             saveCache()
-            if status == "Loading…" || status == "Reading Health…" { status = "" }
+            if status == "Loading…" { status = "" }
         } catch {
             status = "✗ \(error.localizedDescription)"
+        }
+        // HealthKit sync happens AFTER the read, in the background — a slow or
+        // stuck sync can no longer hide the log that's already on screen.
+        if syncHealth { Task { await self.syncHealthInBackground() } }
+    }
+
+    private func syncHealthInBackground() async {
+        do {
+            try await HealthKitService.shared.requestAuthorization()
+            let n = try await SyncEngine.shared.syncNow()
+            guard n > 0 else { return }
+            let pb = try await client()
+            runs = (try? await pb.listRuns()) ?? runs
+            engine = (try? await pb.engineState()) ?? engine
+            recovery = (try? await pb.listRecoveryFull()) ?? recovery
+            saveCache()
+            status = "Synced \(n) new run\(n == 1 ? "" : "s")"
+            haptic()
+        } catch {
+            // Never blank the screen on a sync failure — the read already ran.
+            if status.isEmpty { status = "Showing saved data (sync will retry)" }
         }
     }
 

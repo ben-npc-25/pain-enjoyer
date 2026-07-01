@@ -273,6 +273,15 @@ AFTER=$(msg_count)
 [ "$BEFORE" = "$AFTER" ] && echo "  ✓ no chat message created (feedback stays on the activity)" \
   || { echo "  ✗ run-feedback leaked into chat ($BEFORE → $AFTER)"; exit 1; }
 
+# ── 6d. M7: sheet-backup endpoint is wired + degrades gracefully ────────
+echo "· M7: sheet-backup endpoint (unconfigured → graceful 400, not a crash)…"
+CODE=$(curl -s -o "$WORK/backup.json" -w "%{http_code}" -X POST "$BASE/api/coach/backup-sheet" -H "Authorization: $TOKEN")
+if [ "$CODE" = "400" ] && grep -q "BACKUP_SHEET_URL" "$WORK/backup.json"; then
+  echo "  ✓ backup-sheet wired, no-ops cleanly when BACKUP_SHEET_URL unset"
+else
+  echo "  ✗ backup-sheet unexpected response ($CODE): $(cat "$WORK/backup.json")"; exit 1
+fi
+
 # ── 7. M3: heal the athlete, regenerate — every rail must clamp ─────────
 echo "· M3: plan-week healthy (cap / unknown-type / days_per_week / paces)…"
 PROF_ID=$(curl -fsS "$BASE/api/collections/athlete_profile/records?perPage=1" -H "Authorization: $TOKEN" \

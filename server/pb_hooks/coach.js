@@ -53,7 +53,7 @@ function recentMessages(app, n) {
   for (const r of recs) {
     out.push({
       role: r.getString("role") || "coach",
-      content: r.getString("content").slice(0, 600),
+      content: r.getString("content").slice(0, 400), // token-thrift: cap history length
     });
   }
   return out.reverse();

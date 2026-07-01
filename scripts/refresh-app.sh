@@ -53,12 +53,15 @@ log "re-sign due (${age_days}d since last success) — rebuilding"
 
 cd "$REPO/ios" || fail "repo missing"
 /opt/homebrew/bin/xcodegen >> "$LOG" 2>&1 || xcodegen >> "$LOG" 2>&1 || fail "xcodegen failed"
+# Build for a GENERIC device so a locked/asleep phone can't fail the build with
+# a "developer disk image could not be mounted" timeout. The signed .app is the
+# same; only the install step below needs the phone awake + unlocked.
 xcodebuild -project PainEnjoyer.xcodeproj -scheme PainEnjoyer \
-  -destination "id=$DEVICE_ID" -allowProvisioningUpdates build >> "$LOG" 2>&1 \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates build >> "$LOG" 2>&1 \
   || fail "build failed (Xcode may need an interactive Apple ID re-login)"
 
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >> "$LOG" 2>&1 \
-  || fail "install failed (unlock the phone once and retry?)"
+  || fail "install failed — unlock the iPhone (and keep it unlocked) once, then retry"
 
 echo "$now" > "$STAMP"
 log "✓ re-signed + installed; profile good for 7 more days"

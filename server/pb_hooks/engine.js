@@ -236,7 +236,11 @@ function returnRampPlan(profile, ref, baselineKm) {
 // VDOT = best (max) single-run VDOT in the window. Easy runs score low, so
 // max() naturally finds real efforts without needing intent labels.
 function computeVdot(runs, now) {
-  const WINDOW = 90, MIN_M = 3000, MIN_S = 720;
+  // Reference fitness = the athlete's BEST effort over a long window (a year),
+  // so a short layoff doesn't erase demonstrated fitness. Staleness is surfaced
+  // separately (the traffic light flags an anchor >45 days old as optimistic),
+  // and the coach trains by effort on easy days accordingly.
+  const WINDOW = 365, MIN_M = 3000, MIN_S = 720;
   let best = null;
   for (const r of runs) {
     if (daysAgo(r.date, now) > WINDOW) continue;
@@ -577,7 +581,7 @@ function computeTrafficLight(profile, vdot, acwr, recovery, intensity, lastRunDa
 function computeEngineState(app) {
   const now = new Date();
   const profile = loadProfile(app);
-  const runs = loadRuns(app, now, 180);
+  const runs = loadRuns(app, now, 365); // a year: enough to anchor the best-effort reference
   const recoveryRows = loadRecovery(app, now, 60);
 
   const vdot = computeVdot(runs, now);
