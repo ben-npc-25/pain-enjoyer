@@ -507,6 +507,33 @@ curl -fsS -G "$BASE/api/collections/coach_messages/records" \
   -H "Authorization: $TOKEN" |
   python3 -c 'import sys,json; assert json.load(sys.stdin)["totalItems"] >= 1; print("  ✓ plan_change message posted")'
 
+# ── 12b. M7: preferred run days + weekly volume target (athlete-owned rails) ──
+echo "· M7: run_days + weekly_target_km…"
+# Chronic 11.6, baseline 15.6 → engine cap 13; safety ceiling = max(11.6,15.6,15)×1.5
+# = round(23.4) = 23. Target 40 is above the ceiling → capped to 23. Run days
+# Mon/Wed/Fri only → every other weekday must be rest.
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"injured":false,"return_to_run_date":null,"run_days":"Monday,Wednesday,Friday","weekly_target_km":40}' >/dev/null
+curl -fsS -X POST "$BASE/api/coach/plan-week?start=${NEXT_WEEK[0]}" -H "Authorization: $TOKEN" > "$WORK/plan-sched.json"
+python3 - "$WORK/plan-sched.json" <<'PYEOF'
+import json, sys, datetime
+p = json.load(open(sys.argv[1]))
+assert p["cap_km"] == 23, ("target 40 should be safety-capped to 23", p["cap_km"])
+allowed = {"Monday", "Wednesday", "Friday"}
+wd = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+for d in p["days"]:
+    day = wd[datetime.date.fromisoformat(d["date"]).weekday()]
+    if day not in allowed:
+        assert d["type"] == "rest" and d["distance_km"] == 0, ("non-run day must rest", d)
+assert any("safety-capped" in a for a in p["adjustments"]), p["adjustments"]
+print("  ✓ runs only Mon/Wed/Fri, target 40 km safety-capped to 23 km, flagged")
+PYEOF
+# reset so later sections see the baseline athlete
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"run_days":"","weekly_target_km":0,"return_to_run_date":"'"$(day -34)"'T00:00:00.000Z"}' >/dev/null
+
 # ── 13. M7 Phase 5: goal trajectory (required vs projected VDOT) ────────
 echo "· M7.5: goal trajectory…"
 # Off-track: a 1:30 marathon goal needs a VDOT far above any projection.

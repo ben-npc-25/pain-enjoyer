@@ -372,6 +372,8 @@ struct ProfileSheet: View {
 
     @State private var daysPerWeek: Int
     @State private var longRunDay: String
+    @State private var runDays: Set<String>
+    @State private var weeklyTarget: String
     @State private var injured: Bool
     @State private var injuryNote: String
     @State private var hasReturnDate: Bool
@@ -388,6 +390,11 @@ struct ProfileSheet: View {
         _daysPerWeek = State(initialValue: Int(existing?.days_per_week ?? 4))
         _longRunDay = State(initialValue: (existing?.long_run_day).flatMap {
             Self.weekdays.contains($0) ? $0 : nil } ?? "Sunday")
+        _runDays = State(initialValue: Set((existing?.run_days ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }))
+        _weeklyTarget = State(initialValue: (existing?.weekly_target_km).map {
+            $0 > 0 ? String(Int($0)) : "" } ?? "")
         _injured = State(initialValue: existing?.injured ?? false)
         _injuryNote = State(initialValue: existing?.injury_note ?? "")
         _hasReturnDate = State(initialValue: parsedReturn != nil)
@@ -409,6 +416,30 @@ struct ProfileSheet: View {
                     }
                     TextField("Max heart rate (optional)", text: $hrMax)
                         .keyboardType(.numberPad)
+                }
+                Section {
+                    HStack(spacing: 6) {
+                        ForEach(Self.weekdays, id: \.self) { day in
+                            let on = runDays.contains(day)
+                            Button {
+                                if on { runDays.remove(day) } else { runDays.insert(day) }
+                            } label: {
+                                Text(day.prefix(3))
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                                    .background(RoundedRectangle(cornerRadius: 8)
+                                        .fill(on ? Color.accentColor.opacity(0.25) : Color(.tertiarySystemFill)))
+                                    .foregroundStyle(on ? Color.accentColor : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    TextField("Weekly target km (optional)", text: $weeklyTarget)
+                        .keyboardType(.numberPad)
+                } header: {
+                    Text("Your schedule")
+                } footer: {
+                    Text("Tap the days you run — the plan uses exactly those (overrides days-per-week). Weekly target pushes your volume up; the coach honors it but caps it to a safe build rate.")
                 }
                 Section {
                     Toggle("Currently injured", isOn: $injured)
@@ -459,6 +490,8 @@ struct ProfileSheet: View {
                 ? existing?.methodology : "hybrid_vdot_8020",
             days_per_week: Double(daysPerWeek),
             long_run_day: longRunDay,
+            run_days: Self.weekdays.filter { runDays.contains($0) }.joined(separator: ","),
+            weekly_target_km: Double(weeklyTarget) ?? 0,
             injured: injured,
             injury_note: injured ? injuryNote : "",
             // Persist regardless of `injured`: the return date drives the

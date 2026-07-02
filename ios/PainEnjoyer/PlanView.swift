@@ -370,6 +370,8 @@ struct RaceSheet: View {
             methodology: profile?.methodology?.isEmpty == false ? profile?.methodology : "hybrid_vdot_8020",
             days_per_week: profile?.days_per_week ?? 4,
             long_run_day: profile?.long_run_day ?? "Sunday",
+            run_days: profile?.run_days ?? "",
+            weekly_target_km: profile?.weekly_target_km ?? 0,
             injured: profile?.injured ?? false,
             injury_note: profile?.injury_note ?? "",
             return_to_run_date: profile?.return_to_run_date ?? "",

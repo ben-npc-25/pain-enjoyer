@@ -298,6 +298,8 @@ struct AthleteProfile: Codable {
     var methodology: String?
     var days_per_week: Double?
     var long_run_day: String?
+    var run_days: String? // M7: "Monday,Wednesday,…" — the days you run
+    var weekly_target_km: Double? // M7: your desired weekly volume (caps safely)
     var injured: Bool?
     var injury_note: String?
     var return_to_run_date: String?

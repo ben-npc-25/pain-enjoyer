@@ -21,8 +21,17 @@ final class SyncEngine {
         let (runs, anchor) = try await HealthKitService.shared.fetchNewRuns()
         var uploaded = 0
         if !runs.isEmpty {
-            for run in runs where run.distance_m > 0 {
-                if try await pb.uploadRun(run) { uploaded += 1 }
+            // Skip runs already on the server WITHOUT a POST each (one GET), so a
+            // large re-import backlog can't stall the sync. Upload newest-first
+            // so today's run always lands first even if the session is short.
+            let existing = Set((try? await pb.listRuns())?.compactMap(\.healthkit_uuid) ?? [])
+            let fresh = runs
+                .filter { $0.distance_m > 0 && !existing.contains($0.healthkit_uuid) }
+                .sorted { $0.date > $1.date }
+            for run in fresh {
+                var r = run
+                r.splits = await HealthKitService.shared.splitsForRun(uuid: run.healthkit_uuid)
+                if try await pb.uploadRun(r) { uploaded += 1 }
             }
         }
         // Only advance the anchor once the whole batch is on the server —

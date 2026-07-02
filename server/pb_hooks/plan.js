@@ -52,8 +52,27 @@ function weeklyCapKm(state, profile, ramp) {
   // window and self-limits, so this stays safe.
   const baseline = state.chronic_baseline_km || 0;
   const effective = Math.max(chronic, baseline * 0.75);
-  if (effective < 3) return 15; // genuinely no base — conservative starter volume
-  return Math.round(effective * 1.15); // ≤ ~ACWR 1.15 off the established base
+  let cap = effective < 3 ? 15 : Math.round(effective * 1.15);
+
+  // M7: the athlete's explicit weekly target overrides the engine default —
+  // his call — but bounded by a safety ceiling (1.5× his established base) so a
+  // post-layoff week can't spike into injury territory. weeklyCapNote() reports
+  // whether it was honored or safety-capped.
+  const target = (profile && profile.weekly_target_km) || 0;
+  if (target > 0) {
+    const ceiling = Math.round(Math.max(chronic, baseline, 15) * 1.5);
+    cap = Math.min(target, ceiling);
+  }
+  return cap;
+}
+
+// Human-readable note for when an athlete target is in play (for the rationale).
+function weeklyCapNote(state, profile, cap) {
+  const target = (profile && profile.weekly_target_km) || 0;
+  if (!(target > 0)) return null;
+  return cap < target
+    ? "your weekly target " + target + " km safety-capped to " + cap + " km (build gradually)"
+    : "honoring your weekly target (" + cap + " km)";
 }
 
 function pacesForType(type, zonesSec) {
@@ -114,6 +133,7 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     weeks_to_race: weeksToRace === null ? "no race set" : weeksToRace,
     weekly_distance_cap_km: capKm,
     days_per_week_max: (profile && profile.days_per_week) || 5,
+    run_days: (profile && profile.run_days) || null, // only these weekdays may have runs
     long_run_day: (profile && profile.long_run_day) || "Sunday",
     athlete_injured: !!(profile && profile.injured),
     return_to_run: ramp
@@ -127,7 +147,8 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     (convo ? "Recent chat — honor explicit requests that fit the constraints:\n" + convo + "\n" : "") +
     "Constraints (server clamps violations):\n" + JSON.stringify(constraints) + "\n" +
     "Rules: injured = a niggle to weigh, not forced rest. return_to_run = deliberate low cap, don't exceed, " +
-    "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds.\n" +
+    "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds. " +
+    "If run_days is set, schedule runs ONLY on those weekdays and rest the others (server enforces).\n" +
     "STRICT JSON only, no fences:\n" +
     '{"rationale":"2-4 sentences","days":[{"date":"YYYY-MM-DD","type":"E|T|I|R|MP|LR|rest","distance_km":0,"description":"..."}]}' +
     "\nExactly one entry per date in week_dates, in order. Workout paces are " +
@@ -154,6 +175,13 @@ function sanitizePlan(raw, weekDates, capKm, profile, opts) {
   // maxDays can be overridden (current-week re-plan budgets out days already run)
   const maxDays = (opts && opts.maxDays != null) ? opts.maxDays : ((profile && profile.days_per_week) || 5);
   const longRunDay = (profile && profile.long_run_day) || "Sunday";
+  // M7: preferred run days ("Monday,Wednesday,…"). When set, ONLY these
+  // weekdays may hold runs — the athlete's schedule, not a bare count.
+  const runDaySet = {};
+  if (profile && profile.run_days) {
+    String(profile.run_days).split(",").forEach((d) => { if (d.trim()) runDaySet[d.trim()] = 1; });
+  }
+  const hasRunDays = Object.keys(runDaySet).length > 0;
 
   const byDate = {};
   const rawDays = Array.isArray(raw && raw.days) ? raw.days : [];
@@ -194,7 +222,21 @@ function sanitizePlan(raw, weekDates, capKm, profile, opts) {
     }
   }
 
-  {
+  // M7: enforce the athlete's chosen run days — rest anything scheduled on a
+  // non-run day. This governs the schedule, so the count-based demotion below
+  // is skipped when run_days is set.
+  if (hasRunDays) {
+    for (const d of days) {
+      const wd = WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()];
+      if (!runDaySet[wd] && d.type !== "rest") {
+        adjustments.push(d.date + " → rest (not a chosen run day)");
+        d.type = "rest";
+        d.distance_km = 0;
+      }
+    }
+  }
+
+  if (!hasRunDays) {
     // days_per_week: demote the smallest E days to rest until inside the cap
     let runDays = days.filter((d) => d.type !== "rest");
     while (runDays.length > maxDays) {
@@ -205,10 +247,13 @@ function sanitizePlan(raw, weekDates, capKm, profile, opts) {
       victim.distance_km = 0;
       runDays = days.filter((d) => d.type !== "rest");
     }
+  }
 
-    // long run on the configured day: swap if the LLM put it elsewhere
+  {
+    // long run on the configured day: swap if the LLM put it elsewhere (only
+    // when the long-run day is actually one of the chosen run days).
     const lr = days.find((d) => d.type === "LR");
-    if (lr) {
+    if (lr && (!hasRunDays || runDaySet[longRunDay])) {
       const lrWeekday = WEEKDAYS[new Date(lr.date + "T00:00:00Z").getUTCDay()];
       if (lrWeekday !== longRunDay) {
         const target = days.find((d) => {
@@ -354,6 +399,10 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
     parsed = parsePlanJSON(llm.generate("weekly", persona, prompt));
   }
   const plan = sanitizePlan(parsed, genDates, capKm, profile, { noQuality: noQuality, maxDays: remMaxDays });
+
+  // M7: surface how the athlete's weekly target was handled (honored/capped).
+  const capNote = weeklyCapNote(state, profile, fullCap);
+  if (capNote) plan.adjustments.push(capNote);
 
   // attach code-computed pace targets (LLM never chose these) + Phase 3 rail:
   // rewrite any time-based reps to distance.

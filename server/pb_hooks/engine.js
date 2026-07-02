@@ -155,6 +155,8 @@ function loadProfile(app) {
     goal_time_s: p.getFloat("goal_time_s") || null,
     days_per_week: p.getFloat("days_per_week") || null,
     long_run_day: p.getString("long_run_day") || null,
+    run_days: p.getString("run_days") || null, // M7: "Monday,Wednesday,…" or null
+    weekly_target_km: p.getFloat("weekly_target_km") || null, // M7: athlete volume target
     injured: p.getBool("injured"),
     injury_note: p.getString("injury_note") || null,
     return_to_run_date: p.getString("return_to_run_date") || null,

@@ -90,13 +90,29 @@ final class HealthKitService {
                 }
                 store.execute(q)
             }
-        var runs: [RunPayload] = []
-        for w in samples.compactMap({ $0 as? HKWorkout }) {
-            var p = payload(from: w)
-            p.splits = await fetchSplits(for: w) // M7 Phase 4 (empty when data is too coarse)
-            runs.append(p)
-        }
+        // Lightweight payloads only — NO per-km splits here. Splits are fetched
+        // lazily in SyncEngine, and only for genuinely NEW runs, so a big
+        // re-import backlog can't trigger hundreds of per-sample HK queries on
+        // every sync.
+        let runs = samples.compactMap { $0 as? HKWorkout }.map(payload(from:))
         return (runs, newAnchor)
+    }
+
+    /// M7 Phase 4: per-km splits for a single run, looked up by HealthKit UUID.
+    /// Used by the sync to attach splits only to new runs (not the backlog).
+    func splitsForRun(uuid: String) async -> [RunSplit] {
+        guard let u = UUID(uuidString: uuid) else { return [] }
+        let workouts: [HKWorkout] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: .workoutType(),
+                                  predicate: HKQuery.predicateForObject(with: u),
+                                  limit: 1, sortDescriptors: nil) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKWorkout]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+        guard let w = workouts.first else { return [] }
+        return await fetchSplits(for: w)
     }
 
     /// M7 Phase 4: reconstruct per-kilometre splits from the workout's
