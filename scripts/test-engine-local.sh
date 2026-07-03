@@ -795,5 +795,47 @@ PYEOF
 curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
   -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"run_days":""}' >/dev/null
 
+# ── 16. M9.2: HRmax from observed peak HR + benchmark week ───────────────
+echo "· M9.2: observed-HRmax calibration…"
+# no profile hr_max + a run carrying max_hr 192 → ceiling 194 (observed+2),
+# NOT the avg+8 guess that classified everything as hard.
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"hr_max":0}' >/dev/null
+FAST_ID=$(curl -fsS -G "$BASE/api/collections/runs/records" \
+  --data-urlencode "filter=healthkit_uuid = 'm8-fast-2'" --data-urlencode "perPage=1" \
+  -H "Authorization: $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
+curl -fsS -X PATCH "$BASE/api/collections/runs/records/$FAST_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"max_hr":192}' >/dev/null
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+i = json.load(sys.stdin)["intensity"]
+assert i["available"], i
+assert "194 bpm (from observed run peak HR" in i["hr_max_used"], i["hr_max_used"]
+print("  ✓ HRmax 194 bpm from observed peak (192+2), not the avg+8 guess")'
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"hr_max":185}' >/dev/null
+
+echo "· M9.2: benchmark week (stale VDOT → the block schedules a re-anchor effort)…"
+# delete the fresh d4 anchor → best effort falls back to a 60-day-old run
+# (>45 d stale) → regenerating the block must schedule a benchmark milestone.
+D4_ID=$(curl -fsS -G "$BASE/api/collections/runs/records" \
+  --data-urlencode "filter=healthkit_uuid = 'm8-back-4'" --data-urlencode "perPage=1" \
+  -H "Authorization: $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
+curl -fsS -X DELETE "$BASE/api/collections/runs/records/$D4_ID" -H "Authorization: $TOKEN"
+curl -fsS -X POST "$BASE/api/coach/macro-plan" -H "Authorization: $TOKEN" > "$WORK/macro-bm.json"
+python3 - "$WORK/macro-bm.json" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1]))
+weeks = r["weeks"]
+bm = [i for i, w in enumerate(weeks) if w["milestone"] == "benchmark"]
+assert len(bm) == 1, ("exactly one benchmark week", bm)
+i = bm[0]
+assert i >= 3, ("benchmark lands after the opening rebuild weeks", i)
+assert not weeks[i]["is_cutback"] and weeks[i]["quality_sessions"] >= 1, weeks[i]
+assert "benchmark effort week of" in r["summary"], r["summary"]
+print("  ✓ stale VDOT → benchmark scheduled in block week %d: %s" % (i + 1, weeks[i]["week_start"]))
+PYEOF
+
 echo
 echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) + M8 rebuilding + M9 macro block — all passed"

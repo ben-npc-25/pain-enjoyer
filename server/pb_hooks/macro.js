@@ -131,11 +131,33 @@ function buildWeeks(state, profile, engine, plan, now) {
     });
   }
 
+  // M9.2: when the pace zones are anchored to a stale (>45 d) or missing
+  // effort, the block schedules a BENCHMARK — one controlled 3 km steady
+  // effort around week 4 — to re-anchor VDOT and un-pause the race
+  // projection. Deterministic placement: first ordinary week (no cutback,
+  // has a quality slot, no other milestone) from week 4 onward.
+  const staleVdot =
+    !state.vdot.available ||
+    (state.vdot.source_run && state.vdot.source_run.days_ago > 45);
+  if (staleVdot) {
+    for (let i = 3; i < finalLrIdx; i++) { // short blocks (finalLrIdx ≤ 3) skip it
+      const w = weeks[i];
+      if (!w.is_cutback && w.quality_sessions > 0 && !w.milestone) {
+        w.milestone = "benchmark";
+        break;
+      }
+    }
+  }
+
   const finalLr = finalLrIdx >= 0 ? weeks[finalLrIdx] : null;
+  const benchmark = weeks.find(function (w) { return w.milestone === "benchmark"; }) || null;
   const summary =
     n + "-week block to " + (profile.race_name || "the race") + " (" + raceLabel + "): " +
     "volume " + Math.round(seed) + "→" + Math.round(peakVol) + " km/wk with " +
     cutbacks + " cutback week" + (cutbacks === 1 ? "" : "s") + "; " +
+    (benchmark
+      ? "benchmark effort week of " + benchmark.week_start + " to re-anchor your pace zones; "
+      : "") +
     (finalLr
       ? "final long run ~" + finalLr.long_run_km + " km week of " + finalLr.week_start + "; "
       : "") +

@@ -45,7 +45,35 @@ final class SyncEngine {
         do { try await syncRecovery(pb) }
         catch { print("recovery sync failed: \(error)") }
 
+        // M9.2: one-time max-HR backfill for runs synced before the field
+        // existed — the observed peak calibrates HRmax (and the 80/20 zones)
+        // server-side. New uploads carry max_hr already.
+        await backfillMaxHr(pb)
+
         return uploaded
+    }
+
+    private let maxHrBackfillKey = "runs.maxhr.backfill.v1"
+
+    private func backfillMaxHr(_ pb: PocketBaseClient) async {
+        guard !UserDefaults.standard.bool(forKey: maxHrBackfillKey) else { return }
+        do {
+            let runs = try await pb.listRuns()
+            let missing = runs.filter {
+                $0.isRun && ($0.max_hr ?? 0) <= 0 && ($0.avg_hr ?? 0) > 0
+                    && !($0.healthkit_uuid ?? "").isEmpty
+            }
+            for run in missing {
+                guard let mx = await HealthKitService.shared.maxHeartRate(workoutUUID: run.healthkit_uuid!),
+                      mx > 0 else { continue }
+                try await pb.updateRunMaxHr(id: run.id, maxHr: (mx * 10).rounded() / 10)
+            }
+            UserDefaults.standard.set(true, forKey: maxHrBackfillKey)
+            if !missing.isEmpty { print("max-HR backfill: \(missing.count) run(s) processed") }
+        } catch {
+            // leave the flag unset — retry on the next sync
+            print("max-HR backfill failed (will retry): \(error)")
+        }
     }
 
     /// Upsert daily recovery rows: 60-day backfill once, then a rolling

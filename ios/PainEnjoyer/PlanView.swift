@@ -132,6 +132,9 @@ struct PlanView: View {
                             } else if w.isFinalLongRun {
                                 Image(systemName: "flag.fill")
                                     .font(.system(size: 7)).foregroundStyle(.orange)
+                            } else if w.isBenchmark {
+                                Image(systemName: "stopwatch.fill")
+                                    .font(.system(size: 7)).foregroundStyle(.pink)
                             }
                         }
                     }
@@ -171,6 +174,9 @@ struct PlanView: View {
 
     private func blockFooter(peak: Double, finalLR: MacroWeek?, taperCount: Int) -> String {
         var parts = [String(format: "Peak %.0f km/wk", peak)]
+        if let b = model.macro.first(where: { $0.isBenchmark }) {
+            parts.append("benchmark effort w/c \(b.startDate.formatted(.dateTime.day().month(.abbreviated))) ⏱")
+        }
         if let f = finalLR, let lr = f.long_run_km, lr > 0 {
             parts.append(String(format: "final long run ~%.0f km (w/c %@)", lr,
                                 f.startDate.formatted(.dateTime.day().month(.abbreviated))))

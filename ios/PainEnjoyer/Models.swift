@@ -23,6 +23,7 @@ struct RunPayload: Codable {
     var distance_m: Double
     var duration_s: Double
     var avg_hr: Double?
+    var max_hr: Double? // M9.2: observed peak HR — calibrates HRmax server-side
     var elevation_gain_m: Double?
     var source_app: String
     var healthkit_uuid: String
@@ -37,6 +38,7 @@ struct RunRecord: Codable, Identifiable, Hashable {
     var distance_m: Double
     var duration_s: Double
     var avg_hr: Double?
+    var max_hr: Double? // M9.2: observed peak HR (may be absent on old rows)
     var elevation_gain_m: Double?
     var source_app: String?
     var notes: String? // M3: athlete's subjective note, feeds the coach
@@ -282,6 +284,7 @@ struct MacroWeek: Codable, Identifiable, Hashable {
     var targetKm: Double { target_km ?? 0 }
     var isFinalLongRun: Bool { milestone == "final_long_run" }
     var isRaceWeek: Bool { milestone == "race_week" }
+    var isBenchmark: Bool { milestone == "benchmark" } // M9.2: re-anchor effort
 }
 
 struct PlanWeek: Codable, Identifiable {

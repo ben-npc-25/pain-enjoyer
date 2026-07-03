@@ -147,6 +147,13 @@ final class PocketBaseClient {
         try await request("/api/collections/recovery_daily/records/\(id)", method: "PATCH", body: r)
     }
 
+    /// M9.2: attach an observed peak HR to an already-synced run (backfill).
+    func updateRunMaxHr(id: String, maxHr: Double) async throws {
+        struct P: Encodable { let max_hr: Double }
+        try await request("/api/collections/runs/records/\(id)", method: "PATCH",
+                          body: P(max_hr: maxHr))
+    }
+
     // MARK: M9 — the macro training block
 
     func listMacro() async throws -> [MacroWeek] {

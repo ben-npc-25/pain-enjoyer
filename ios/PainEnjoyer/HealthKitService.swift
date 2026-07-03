@@ -219,8 +219,10 @@ final class HealthKitService {
         }
         let distance = w.statistics(for: distType)?
             .sumQuantity()?.doubleValue(for: .meter()) ?? 0
-        let avgHR = w.statistics(for: HKQuantityType(.heartRate))?
-            .averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        let hrStats = w.statistics(for: HKQuantityType(.heartRate))
+        let avgHR = hrStats?.averageQuantity()?.doubleValue(for: bpm)
+        let maxHR = hrStats?.maximumQuantity()?.doubleValue(for: bpm) // M9.2
         let elevation = (w.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity)?
             .doubleValue(for: .meter())
 
@@ -229,11 +231,29 @@ final class HealthKitService {
             distance_m: distance,
             duration_s: w.duration,
             avg_hr: avgHR,
+            max_hr: maxHR,
             elevation_gain_m: elevation,
             source_app: w.sourceRevision.source.name,
             healthkit_uuid: w.uuid.uuidString,
             activity_type: Self.activityName(w.workoutActivityType)
         )
+    }
+
+    /// M9.2: observed peak HR for an already-synced workout (backfill path).
+    func maxHeartRate(workoutUUID: String) async -> Double? {
+        guard let u = UUID(uuidString: workoutUUID) else { return nil }
+        let workouts: [HKWorkout] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: .workoutType(),
+                                  predicate: HKQuery.predicateForObject(with: u),
+                                  limit: 1, sortDescriptors: nil) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKWorkout]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+        guard let w = workouts.first else { return nil }
+        return w.statistics(for: HKQuantityType(.heartRate))?
+            .maximumQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
     }
 
     // MARK: Background delivery

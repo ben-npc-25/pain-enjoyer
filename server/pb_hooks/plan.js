@@ -198,6 +198,9 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
       ? "This week executes the training block above: long run ≈ long_run_target_km, at most " +
         "quality_sessions_max quality sessions" +
         (macroWk.is_cutback ? ", CUTBACK week — deliberately easier, do not compensate" : "") +
+        (macroWk.milestone === "benchmark"
+          ? ", BENCHMARK week — one T-type session must be a controlled 3 km steady effort (strong, not all-out) to re-anchor pace zones"
+          : "") +
         (macroWk.milestone === "final_long_run" ? ", this is the FINAL LONG RUN of the block — say so" : "") +
         (macroWk.milestone === "race_week" ? ", RACE WEEK — short sharpeners only, race day is the event" : "") +
         ".\n"

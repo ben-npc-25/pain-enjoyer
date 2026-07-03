@@ -176,6 +176,17 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   NOTE: Ben's profile run_days is now EMPTY (unclear if he cleared it) — if
   he re-sets it, include Saturday (his long_run_day). Suite: 16 sections
   incl. move + LR-guarantee asserts.
+- **M9.2 (2026-07-03)**: self-calibration. ① **HRmax from observed peak HR**
+  — iOS now uploads per-run `max_hr` (schema field existed, never filled) +
+  one-time backfill of old rows (UserDefaults `runs.maxhr.backfill.v1`);
+  engine's 80/20 ceiling = max observed + 2 when profile hr_max unset (the
+  avg+8 guess made everything read "hard"/0% easy). ② **Benchmark week** —
+  when the VDOT anchor is stale (>45 d) at block generation, the block
+  schedules milestone `benchmark` (first ordinary week from week 4): one
+  controlled 3 km steady effort to re-anchor zones + un-pause the race
+  projection; surfaced in prompts, plan rules, block summary, and the chart
+  (⏱). Ben's block needs a rebuild tap (↻) to pick the benchmark up. Suite:
+  17 sections.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from

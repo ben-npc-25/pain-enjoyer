@@ -119,6 +119,7 @@ function loadRuns(app, now, days) {
       distM: distM,
       durS: durS,
       avgHr: r.getFloat("avg_hr") || null,
+      maxHr: r.getFloat("max_hr") || null, // M9.2: observed peak HR (HRmax calibration)
       effort: r.getFloat("effort") || null, // M7 Phase 1: RPE 1–5, null if unrated
     });
   }
@@ -472,10 +473,19 @@ function computeIntensity(runs, profile, now) {
   if (hrMax) {
     hrMaxNote = Math.round(hrMax) + " bpm (from profile)";
   } else {
-    let maxAvg = 0;
-    for (const r of runs) if (r.avgHr > maxAvg) maxAvg = r.avgHr;
-    hrMax = maxAvg + 8; // avg-HR ceiling underestimates true max
-    hrMaxNote = Math.round(hrMax) + " bpm (estimated from history — set hr_max in profile to fix)";
+    // M9.2: observed per-run PEAK HR is a far better ceiling than avg+8 —
+    // the old estimate (avg-based 180) classified every run as hard.
+    let maxObs = 0;
+    for (const r of runs) if (r.maxHr > maxObs) maxObs = r.maxHr;
+    if (maxObs > 120) {
+      hrMax = maxObs + 2; // true max is at least the highest ever seen
+      hrMaxNote = Math.round(hrMax) + " bpm (from observed run peak HR — set hr_max in profile to override)";
+    } else {
+      let maxAvg = 0;
+      for (const r of runs) if (r.avgHr > maxAvg) maxAvg = r.avgHr;
+      hrMax = maxAvg + 8; // avg-HR ceiling underestimates true max
+      hrMaxNote = Math.round(hrMax) + " bpm (estimated from history — set hr_max in profile to fix)";
+    }
   }
   const threshold = 0.77 * hrMax;
   let easyS = 0, totalS = 0;
@@ -846,6 +856,10 @@ function forLLM(state) {
       "target " + fmtKm(m.target_km) + ", long run ~" + fmtKm(m.long_run_km) +
       ", " + m.quality_sessions + " quality session" + (m.quality_sessions === 1 ? "" : "s");
     if (m.is_cutback) s += "; CUTBACK week (deliberately easier — recovery is the point)";
+    if (m.milestone === "benchmark") {
+      s += "; BENCHMARK week — one controlled 3 km steady effort (strong but not " +
+        "all-out) to re-anchor pace zones and the race projection";
+    }
     if (m.milestone === "final_long_run") s += "; FINAL LONG RUN of the block this week";
     if (m.milestone === "race_week") {
       s += "; RACE WEEK";
