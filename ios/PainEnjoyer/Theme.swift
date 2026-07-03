@@ -132,3 +132,17 @@ struct RunTypeChip: View {
             .foregroundStyle(type.color)
     }
 }
+
+/// M8: chip for cross-training activities ("Hike", "Ride", …) — pace-vs-zone
+/// classification would be nonsense there.
+struct ActivityChip: View {
+    let run: RunRecord
+
+    var body: some View {
+        Text(run.activityLabel)
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(Color.secondary.opacity(0.16)))
+            .foregroundStyle(.secondary)
+    }
+}

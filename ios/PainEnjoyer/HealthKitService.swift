@@ -20,7 +20,29 @@ enum HealthKitError: LocalizedError {
 final class HealthKitService {
     static let shared = HealthKitService()
     private let store = HKHealthStore()
-    private let anchorKey = "hk.workouts.anchor.v1"
+    // v2 (M8): the predicate widened from running-only to all tracked activity
+    // types. Bumping the key drops the old anchor so the next sync re-imports
+    // the full window and picks up historical hikes/rides — the server's
+    // unique healthkit_uuid index makes re-uploads a no-op.
+    private let anchorKey = "hk.workouts.anchor.v2"
+
+    /// M8: everything the coach should SEE. Running feeds the engine math;
+    /// the rest is evidence the athlete is active (a month of hiking is not
+    /// "detraining"). Server stores the string in runs.activity_type.
+    static let trackedActivities: [(HKWorkoutActivityType, String)] = [
+        (.running, "running"),
+        (.hiking, "hiking"),
+        (.walking, "walking"),
+        (.cycling, "cycling"),
+        (.swimming, "swimming"),
+        (.traditionalStrengthTraining, "strength"),
+        (.functionalStrengthTraining, "strength"),
+        (.yoga, "yoga"),
+    ]
+
+    static func activityName(_ t: HKWorkoutActivityType) -> String {
+        trackedActivities.first { $0.0 == t }?.1 ?? "other"
+    }
     /// Initial import window — bounds the very first sync (and re-import). A
     /// year so the engine can anchor fitness to the athlete's best effort, not
     /// just recent runs (the engine's VDOT reference also looks back a year).
@@ -36,6 +58,9 @@ final class HealthKitService {
             .workoutType(),
             HKQuantityType(.heartRate),
             HKQuantityType(.distanceWalkingRunning),
+            // M8: per-sport distance for cross-training sync
+            HKQuantityType(.distanceCycling),
+            HKQuantityType(.distanceSwimming),
             // M2 recovery metrics — request now so we only prompt once:
             HKQuantityType(.heartRateVariabilitySDNN),
             HKQuantityType(.restingHeartRate),
@@ -49,11 +74,12 @@ final class HealthKitService {
 
     // MARK: Anchored incremental fetch
 
-    private var runningPredicate: NSPredicate {
-        let running = HKQuery.predicateForWorkouts(with: .running)
+    private var workoutPredicate: NSPredicate {
+        let types = NSCompoundPredicate(orPredicateWithSubpredicates:
+            Self.trackedActivities.map { HKQuery.predicateForWorkouts(with: $0.0) })
         let since = Calendar.current.date(byAdding: .day, value: -seedDays, to: .now)!
         let window = HKQuery.predicateForSamples(withStart: since, end: nil, options: [])
-        return NSCompoundPredicate(andPredicateWithSubpredicates: [running, window])
+        return NSCompoundPredicate(andPredicateWithSubpredicates: [types, window])
     }
 
     private func loadAnchor() -> HKQueryAnchor? {
@@ -75,13 +101,13 @@ final class HealthKitService {
     /// runs already stored. Used by "re-import all history".
     func resetAnchor() { UserDefaults.standard.removeObject(forKey: anchorKey) }
 
-    /// New running workouts since the last committed anchor.
+    /// New workouts (running + cross-training) since the last committed anchor.
     func fetchNewRuns() async throws -> (runs: [RunPayload], anchor: HKQueryAnchor?) {
         let (samples, newAnchor): ([HKSample], HKQueryAnchor?) =
             try await withCheckedThrowingContinuation { cont in
                 let q = HKAnchoredObjectQuery(
                     type: .workoutType(),
-                    predicate: runningPredicate,
+                    predicate: workoutPredicate,
                     anchor: loadAnchor(),
                     limit: HKObjectQueryNoLimit
                 ) { _, added, _, anchor, error in
@@ -184,7 +210,14 @@ final class HealthKitService {
     }
 
     private func payload(from w: HKWorkout) -> RunPayload {
-        let distance = w.statistics(for: HKQuantityType(.distanceWalkingRunning))?
+        // Distance lives under a per-sport quantity type (M8).
+        let distType: HKQuantityType
+        switch w.workoutActivityType {
+        case .cycling: distType = HKQuantityType(.distanceCycling)
+        case .swimming: distType = HKQuantityType(.distanceSwimming)
+        default: distType = HKQuantityType(.distanceWalkingRunning)
+        }
+        let distance = w.statistics(for: distType)?
             .sumQuantity()?.doubleValue(for: .meter()) ?? 0
         let avgHR = w.statistics(for: HKQuantityType(.heartRate))?
             .averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
@@ -198,7 +231,8 @@ final class HealthKitService {
             avg_hr: avgHR,
             elevation_gain_m: elevation,
             source_app: w.sourceRevision.source.name,
-            healthkit_uuid: w.uuid.uuidString
+            healthkit_uuid: w.uuid.uuidString,
+            activity_type: Self.activityName(w.workoutActivityType)
         )
     }
 

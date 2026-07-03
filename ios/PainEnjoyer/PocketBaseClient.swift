@@ -147,6 +147,20 @@ final class PocketBaseClient {
         try await request("/api/collections/recovery_daily/records/\(id)", method: "PATCH", body: r)
     }
 
+    // MARK: M9 — the macro training block
+
+    func listMacro() async throws -> [MacroWeek] {
+        let data = try await request("/api/collections/macro_weeks/records", method: "GET",
+                                     query: [.init(name: "perPage", value: "200"),
+                                             .init(name: "sort", value: "week_start")])
+        return try JSONDecoder().decode(ListResponse<MacroWeek>.self, from: data).items
+    }
+
+    /// (Re)generate the block from today's reality — deterministic, no LLM.
+    func buildMacroPlan() async throws {
+        _ = try await request("/api/coach/macro-plan")
+    }
+
     // MARK: M3 — plan, chat, run notes
 
     func listPlanned() async throws -> [PlannedWorkout] {
@@ -212,10 +226,12 @@ final class PocketBaseClient {
         return try JSONDecoder().decode(ListResponse<PlanWeek>.self, from: data).items
     }
 
-    func trendsReview() async throws -> String {
-        struct R: Decodable { let review: String }
-        let data = try await request("/api/coach/trends-review")
-        return try JSONDecoder().decode(R.self, from: data).review
+    /// M6.1 returns `review` as a structured object (per-chart commentary),
+    /// not a string — the app reads it from the stored weekly_review message,
+    /// so just fire the request. (Decoding it as String was the "data couldn't
+    /// be read" bug.)
+    func trendsReview() async throws {
+        _ = try await request("/api/coach/trends-review")
     }
 
     /// M5: app-open ping — feeds the engagement score on the server.

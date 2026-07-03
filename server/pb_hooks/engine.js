@@ -98,11 +98,13 @@ const ZONE_FRACTIONS = {
 
 // ── data loading ────────────────────────────────────────────────────────
 
+// Running only — VDOT/ACWR/80-20 are running-specific. Cross-training rows
+// (M8: hikes, rides, …) live in the same collection but never enter run math.
 function loadRuns(app, now, days) {
   const cutoff = pbDate(new Date(now.getTime() - days * 86400000));
   const recs = app.findRecordsByFilter(
     "runs",
-    "date >= '" + cutoff + "'",
+    "date >= '" + cutoff + "' && (activity_type = '' || activity_type = 'running')",
     "-date",
     500,
     0
@@ -121,6 +123,46 @@ function loadRuns(app, now, days) {
     });
   }
   return runs; // newest first
+}
+
+// M8: non-running activity (hiking, cycling, …) — evidence the athlete is
+// active even when no runs land. Feeds the LLM facts + softens "detraining"
+// judgments; deliberately kept OUT of the running math above.
+function loadCrossTraining(app, now, days) {
+  const cutoff = pbDate(new Date(now.getTime() - days * 86400000));
+  const recs = app.findRecordsByFilter(
+    "runs",
+    "date >= '" + cutoff + "' && activity_type != '' && activity_type != 'running'",
+    "-date",
+    200,
+    0
+  );
+  const byType = {};
+  let count = 0;
+  for (const r of recs) {
+    const durS = r.getFloat("duration_s");
+    if (!(durS > 0)) continue;
+    const t = r.getString("activity_type");
+    if (!byType[t]) byType[t] = { n: 0, km: 0, hours: 0 };
+    byType[t].n++;
+    byType[t].km += (r.getFloat("distance_m") || 0) / 1000;
+    byType[t].hours += durS / 3600;
+    count++;
+  }
+  if (!count) return { count: 0, summary: null };
+  const parts = [];
+  for (const t in byType) {
+    const b = byType[t];
+    let s = b.n + " " + t + (b.n > 1 ? " sessions" : " session") +
+      " (" + round(b.hours, 1) + " h";
+    if (b.km >= 1) s += ", " + fmtKm(b.km);
+    s += ")";
+    parts.push(s);
+  }
+  return {
+    count: count,
+    summary: parts.join(", ") + " in the last " + days + " days",
+  };
 }
 
 function loadRecovery(app, now, days) {
@@ -306,7 +348,14 @@ function computeVdot(runs, now) {
 }
 
 // ACWR on distance: acute = last 7 days; chronic = 28-day total / 4.
-function computeAcwr(runs, now) {
+//
+// M8 comeback fix: after a training break the 28-day chronic collapses toward
+// zero, so ANY resumption produces an absurd ratio (11.5 km against a 3.8 km/wk
+// denominator once read as a 2.99 "danger spike" and pinned the light red for
+// weeks). When the chronic has fallen below half the established baseline (the
+// 180-day peak 28-day volume) and the athlete is running again, the state is
+// "rebuilding": judged against the baseline, not the collapsed average.
+function computeAcwr(runs, now, baselineKm) {
   let acuteKm = 0, chronicKm = 0;
   for (const r of runs) {
     const d = daysAgo(r.date, now);
@@ -315,8 +364,13 @@ function computeAcwr(runs, now) {
     if (d < 7) acuteKm += r.distM / 1000;
   }
   const chronicWeekly = chronicKm / 4;
+  const baseline = baselineKm || 0;
+  const rebuilding = baseline >= 10 && chronicWeekly < 0.5 * baseline && acuteKm > 0;
   let state, ratio = null;
-  if (chronicWeekly < 3) {
+  if (rebuilding) {
+    state = "rebuilding";
+    if (chronicWeekly >= 3) ratio = round(acuteKm / chronicWeekly, 2);
+  } else if (chronicWeekly < 3) {
     state = "no_base"; // < 3 km/wk average — a ratio would be noise
   } else {
     ratio = round(acuteKm / chronicWeekly, 2);
@@ -327,8 +381,13 @@ function computeAcwr(runs, now) {
     ratio: ratio,
     acute_week_km: round(acuteKm, 1),
     chronic_weekly_km: round(chronicWeekly, 1),
+    baseline_weekly_km: round(baseline, 1),
     summary:
-      state === "no_base"
+      state === "rebuilding"
+        ? fmtKm(acuteKm) + " in the last 7 days, rebuilding after a break — recent 28-day average is only " +
+          fmtKm(chronicWeekly) + "/wk vs an established base of " + fmtKm(baseline) +
+          "/wk, so the acute:chronic ratio is not meaningful right now; ramp gradually toward the base"
+        : state === "no_base"
         ? "not enough history for a load ratio (" + fmtKm(chronicWeekly) + "/wk over 28 days)"
         : fmtKm(acuteKm) +
           " in the last 7 days vs " +
@@ -457,7 +516,7 @@ function raceDistanceM(profile) {
   return 42195;
 }
 
-function computeTrajectory(runs, profile, now, vdot) {
+function computeTrajectory(runs, profile, now, vdot, acwrState) {
   if (!profile || !profile.race_date || !profile.goal_time_s) {
     return { available: false, reason: "no race goal set (need a race date and goal time)" };
   }
@@ -497,10 +556,34 @@ function computeTrajectory(runs, profile, now, vdot) {
   if (trendPerMonth < -2) trendPerMonth = -2;
 
   const currentVdot = vdot && vdot.available ? vdot.value : round((sy - slope * sx) / n, 1);
+  const weeks = Math.round(daysToRace / 7);
+
+  // M8: a break-then-comeback produces a negative slope that, extrapolated
+  // months out, projects absurd decay ("40.6 by race day") — demotivating
+  // nonsense once training has RESUMED. While rebuilding, freeze the
+  // projection at current fitness and say the trend is paused. (True
+  // detraining — still not running — keeps the honest decay projection.)
+  if (acwrState === "rebuilding" && trendPerMonth < 0) {
+    const diff0 = round(currentVdot - requiredVdot, 1);
+    const status0 = diff0 > 1 ? "on_track" : diff0 < -1 ? "off_track" : "borderline";
+    return {
+      available: true,
+      required_vdot: requiredVdot,
+      current_vdot: currentVdot,
+      trend_per_month: null,
+      projected_vdot: currentVdot,
+      weeks_to_race: weeks,
+      status: status0,
+      summary:
+        "needs VDOT " + requiredVdot + " for the goal; currently " + currentVdot +
+        " (" + weeks + " wks to race) — trend projection paused while rebuilding " +
+        "after a break; it resumes once regular quality efforts return",
+    };
+  }
+
   const projectedVdot = round(currentVdot + trendPerMonth * (daysToRace / 30), 1);
   const diff = round(projectedVdot - requiredVdot, 1);
   const status = diff > 1 ? "on_track" : diff < -1 ? "off_track" : "borderline";
-  const weeks = Math.round(daysToRace / 7);
 
   return {
     available: true,
@@ -517,47 +600,107 @@ function computeTrajectory(runs, profile, now, vdot) {
   };
 }
 
+// ── training block (M9) ─────────────────────────────────────────────────
+// The macro block's slice for the current week + the next milestones, read
+// straight from macro_weeks (written by macro.js). null when no block exists
+// (or pre-migration) — everything degrades to the old week-by-week behavior.
+
+function loadMacroContext(app, now) {
+  try {
+    const rows = app.findRecordsByFilter("macro_weeks", "id != ''", "week_start", 200, 0);
+    if (!rows.length) return null;
+    const monday = isoDay(mondayOf(now));
+    let current = null, position = 0, finalLr = null, raceWeek = null, taperStart = null;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.getString("week_start").slice(0, 10) === monday) { current = r; position = i + 1; }
+      if (r.getString("milestone") === "final_long_run") finalLr = r;
+      if (r.getString("milestone") === "race_week") raceWeek = r;
+      if (!taperStart && r.getString("phase") === "taper") taperStart = r;
+    }
+    if (!current) return null; // block stale/out of range — ensure() will fix it
+    return {
+      week_number: position,
+      weeks_total: rows.length,
+      phase: current.getString("phase"),
+      target_km: current.getFloat("target_km"),
+      long_run_km: current.getFloat("long_run_km"),
+      quality_sessions: current.getFloat("quality_sessions"),
+      is_cutback: current.getBool("is_cutback"),
+      milestone: current.getString("milestone"),
+      final_long_run: finalLr
+        ? { week_start: finalLr.getString("week_start").slice(0, 10), km: finalLr.getFloat("long_run_km") }
+        : null,
+      taper_start: taperStart ? taperStart.getString("week_start").slice(0, 10) : null,
+      race_week_start: raceWeek ? raceWeek.getString("week_start").slice(0, 10) : null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 // ── traffic light ───────────────────────────────────────────────────────
 // Worst severity wins; ALL triggered reasons are reported so the LLM can
 // explain the full picture, not just the loudest signal.
 
-function computeTrafficLight(profile, vdot, acwr, recovery, intensity, lastRunDaysAgo) {
+function computeTrafficLight(profile, vdot, acwr, recovery, intensity, lastRunDaysAgo, crossTraining) {
   const reasons = [];
+  const drivers = []; // M8: machine-readable — lets code react to WHY, not just the color
   let severity = 0; // 0 green · 1 yellow · 2 red
-  function flag(level, msg) {
+  function flag(level, driver, msg) {
     reasons.push(msg);
+    drivers.push(driver);
     if (level > severity) severity = level;
   }
+  const xtrain = crossTraining && crossTraining.count > 0 ? crossTraining.summary : null;
 
   // M7: injury is intentionally NOT a traffic-light driver anymore — it's a
   // minor, contextual signal the coach weighs (surfaced via athlete_status),
   // not a hard rail that pins the light red. The light reflects load, recovery,
   // and intensity; the LLM decides how much the noted injury should matter.
 
-  if (acwr.state === "no_base") {
-    flag(1, "not enough recent history to judge training load");
+  if (acwr.state === "rebuilding") {
+    // M8: comeback weeks are judged against the established base, never the
+    // collapsed 28-day average. Only ramping back too fast flags — a careful
+    // return contributes green.
+    if (acwr.acute_week_km > 0.6 * acwr.baseline_weekly_km) {
+      flag(1, "ramp_fast",
+        "ramping back fast after a break: " + fmtKm(acwr.acute_week_km) +
+          " this week is already >60% of your " + fmtKm(acwr.baseline_weekly_km) +
+          "/wk base — hold volume a week before building further");
+    }
+  } else if (acwr.state === "no_base") {
+    flag(1, "no_base", "not enough recent history to judge training load");
   } else if (acwr.ratio > 1.5) {
-    flag(2, "load spike: ACWR " + acwr.ratio.toFixed(2) + " (danger zone is >1.5)");
+    flag(2, "load_spike", "load spike: ACWR " + acwr.ratio.toFixed(2) + " (danger zone is >1.5)");
   } else if (acwr.ratio > 1.3) {
-    flag(1, "load climbing fast: ACWR " + acwr.ratio.toFixed(2) + " (sweet spot 0.8–1.3)");
+    flag(1, "load_climbing", "load climbing fast: ACWR " + acwr.ratio.toFixed(2) + " (sweet spot 0.8–1.3)");
   } else if (acwr.state === "detraining" || acwr.ratio < 0.8) {
-    flag(1,
+    flag(1, "load_low",
       "load well below base (ACWR " +
         (acwr.ratio === null ? "n/a" : acwr.ratio.toFixed(2)) +
-        ") — fitness is decaying; rebuild gradually when able"
+        ") — fitness is decaying; rebuild gradually when able" +
+        (xtrain ? " (though cross-training is keeping you active: " + xtrain + ")" : "")
     );
   }
 
   if (recovery.available) {
     if (recovery.score < 40) {
-      flag(2, "recovery is poor (" + recovery.score + "/100) — body is under strain");
+      flag(2, "recovery_poor", "recovery is poor (" + recovery.score + "/100) — body is under strain");
     } else if (recovery.score < 65) {
-      flag(1, "recovery below normal (" + recovery.score + "/100)");
+      flag(1, "recovery_low", "recovery below normal (" + recovery.score + "/100)");
     }
   }
 
-  if (intensity.available && intensity.pct_easy_time < 75) {
-    flag(1,
+  // M8: 3 runs is too small a sample to scold about intensity discipline —
+  // and during a rebuild every run being short/steep says nothing about 80/20.
+  if (
+    intensity.available &&
+    intensity.pct_easy_time < 75 &&
+    intensity.runs_counted >= 5 &&
+    acwr.state !== "rebuilding"
+  ) {
+    flag(1, "intensity",
       "intensity discipline: only " +
         intensity.pct_easy_time +
         "% of time easy in 28 days (80/20 target ≥80%)"
@@ -565,17 +708,21 @@ function computeTrafficLight(profile, vdot, acwr, recovery, intensity, lastRunDa
   }
 
   if (!vdot.available) {
-    flag(1, "no recent quality effort to anchor pace zones (" + vdot.reason + ")");
+    flag(1, "zones_missing", "no recent quality effort to anchor pace zones (" + vdot.reason + ")");
   } else if (vdot.source_run.days_ago > 45) {
-    flag(1, "pace zones anchored to a " + vdot.source_run.days_ago + "-day-old effort — treat as optimistic");
+    flag(1, "zones_stale", "pace zones anchored to a " + vdot.source_run.days_ago + "-day-old effort — treat as optimistic");
   }
 
   if (severity === 0) {
-    reasons.push("load, recovery, and intensity distribution all in normal ranges");
+    reasons.push(
+      acwr.state === "rebuilding"
+        ? "rebuilding after a break at a sensible rate — recovery and ramp both look right"
+        : "load, recovery, and intensity distribution all in normal ranges"
+    );
   }
   const light = severity === 2 ? "red" : severity === 1 ? "yellow" : "green";
   const emoji = severity === 2 ? "🔴" : severity === 1 ? "🟡" : "🟢";
-  return { light: light, emoji: emoji, reasons: reasons };
+  return { light: light, emoji: emoji, reasons: reasons, drivers: drivers };
 }
 
 // ── public API ──────────────────────────────────────────────────────────
@@ -586,8 +733,12 @@ function computeEngineState(app) {
   const runs = loadRuns(app, now, 365); // a year: enough to anchor the best-effort reference
   const recoveryRows = loadRecovery(app, now, 60);
 
+  // M8: baseline first — the ACWR comeback logic needs it as its yardstick.
+  const chronicBaseline = chronicBaselineKm(runs, now);
+  const crossTraining = loadCrossTraining(app, now, 28);
+
   const vdot = computeVdot(runs, now);
-  const acwr = computeAcwr(runs, now);
+  const acwr = computeAcwr(runs, now, chronicBaseline);
   const recovery = computeRecovery(recoveryRows, now);
   const intensity = computeIntensity(runs, profile, now);
 
@@ -604,15 +755,17 @@ function computeEngineState(app) {
   };
 
   const trafficLight = computeTrafficLight(
-    profile, vdot, acwr, recovery, intensity, lastRunDaysAgo
+    profile, vdot, acwr, recovery, intensity, lastRunDaysAgo, crossTraining
   );
 
-  // M7 Phase 6: pre-injury baseline + this-moment return-to-run ramp state.
-  const chronicBaseline = chronicBaselineKm(runs, now);
+  // M7 Phase 6: this-moment return-to-run ramp state (baseline computed above).
   const returnRamp = returnRampPlan(profile, now, chronicBaseline);
 
   // M7 Phase 5: goal trajectory (required vs projected VDOT).
-  const trajectory = computeTrajectory(runs, profile, now, vdot);
+  const trajectory = computeTrajectory(runs, profile, now, vdot, acwr.state);
+
+  // M9: where this week sits in the macro training block (null = no block).
+  const macroWeek = loadMacroContext(app, now);
 
   return {
     computed_at: now.toISOString(),
@@ -623,9 +776,11 @@ function computeEngineState(app) {
     intensity: intensity,
     history: history,
     last_run_effort: lastRun && lastRun.effort ? lastRun.effort : null, // M7 Phase 1
+    cross_training: crossTraining, // M8: non-running activity, 28 days
     chronic_baseline_km: chronicBaseline,
     return_ramp: returnRamp, // null unless actively ramping back
     goal_trajectory: trajectory, // M7 Phase 5
+    macro_week: macroWeek, // M9: this week's slice of the training block
     traffic_light: trafficLight,
   };
 }
@@ -660,6 +815,11 @@ function forLLM(state) {
   if (state.last_run_effort) {
     f.last_run_effort = "athlete rated the most recent run's effort " + effortString(state.last_run_effort);
   }
+  if (state.cross_training && state.cross_training.count > 0) {
+    f.cross_training =
+      "non-running activity (does not count toward running load, but the athlete " +
+      "is staying active): " + state.cross_training.summary;
+  }
   f.recovery = state.recovery.available ? state.recovery.summary : "unknown — " + state.recovery.reason;
   f.intensity_8020 = state.intensity.available ? state.intensity.summary : "unknown — " + state.intensity.reason;
   if (state.profile) {
@@ -678,6 +838,27 @@ function forLLM(state) {
   }
   if (state.goal_trajectory && state.goal_trajectory.available) {
     f.goal_trajectory = state.goal_trajectory.summary;
+  }
+  if (state.macro_week) {
+    const m = state.macro_week;
+    let s =
+      "block week " + m.week_number + " of " + m.weeks_total + " (" + m.phase + ") — " +
+      "target " + fmtKm(m.target_km) + ", long run ~" + fmtKm(m.long_run_km) +
+      ", " + m.quality_sessions + " quality session" + (m.quality_sessions === 1 ? "" : "s");
+    if (m.is_cutback) s += "; CUTBACK week (deliberately easier — recovery is the point)";
+    if (m.milestone === "final_long_run") s += "; FINAL LONG RUN of the block this week";
+    if (m.milestone === "race_week") {
+      s += "; RACE WEEK";
+    } else {
+      const thisMon = isoDay(mondayOf(new Date()));
+      if (m.final_long_run && m.final_long_run.week_start > thisMon) {
+        s += ". Final long run ~" + fmtKm(m.final_long_run.km) + " week of " + m.final_long_run.week_start;
+      }
+      if (m.taper_start && m.taper_start > thisMon) {
+        s += "; taper starts week of " + m.taper_start;
+      }
+    }
+    f.training_block = s + ". Coach toward executing this block.";
   }
   if (state.return_ramp) {
     const r = state.return_ramp;
@@ -739,6 +920,7 @@ module.exports = {
   forLLM: forLLM,
   trendFacts: trendFacts,
   returnRampPlan: returnRampPlan, // M7 Phase 6: shared by plan.js
+  raceDistanceM: raceDistanceM, // M9: macro.js sizes the block by race distance
   // exposed for the smoke test
   _vdotForEffort: vdotForEffort,
   _paceSecPerKmForFraction: paceSecPerKmForFraction,

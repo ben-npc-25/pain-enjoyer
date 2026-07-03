@@ -1,7 +1,9 @@
 import SwiftUI
+import Charts
 
-/// M6: the training plan as a first-class tab — race countdown, equivalent
-/// race times from the engine's VDOT, and the upcoming weeks day by day.
+/// M6→M9: the training plan as a first-class tab. The macro block — the
+/// program from today to race day — is the centerpiece; race countdown,
+/// VDOT race times, and the upcoming weeks execute it.
 struct PlanView: View {
     @ObservedObject var model: AppModel
     @State private var showRaceSheet = false
@@ -17,6 +19,7 @@ struct PlanView: View {
                             .foregroundStyle(model.status.hasPrefix("✗") ? .red : .secondary)
                     }
                     raceCard
+                    blockCard
                     trajectoryCard
                     if let vdot = model.engine?.vdot.value { predictorCard(vdot) }
                     weeksSection
@@ -41,6 +44,140 @@ struct PlanView: View {
                 }
             }
         }
+    }
+
+    // MARK: M9 — the training block (the program, today → race day)
+
+    private static func phaseColor(_ phase: String?) -> Color {
+        switch phase ?? "" {
+        case "base": return .teal
+        case "build": return .accentColor
+        case "peak": return .orange
+        case "taper": return .purple
+        default: return .gray
+        }
+    }
+
+    /// Actual running km per block week (Monday-keyed, runs only).
+    private var actualByWeek: [String: Double] {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = .current
+        var out: [String: Double] = [:]
+        for run in model.runs where run.isRun {
+            guard let wk = cal.dateInterval(of: .weekOfYear, for: run.startDate)?.start else { continue }
+            out[wk.localDayKey, default: 0] += run.distanceKm
+        }
+        return out
+    }
+
+    @ViewBuilder
+    private var blockCard: some View {
+        let hasRace = !(model.profile?.race_name ?? "").isEmpty
+        if model.macro.isEmpty {
+            if hasRace {
+                VStack(spacing: 10) {
+                    Text("Your program").font(.headline)
+                    Text("One structured block from today to race day — volume build, cutback weeks, the long-run curve, your final long run, and the taper.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button {
+                        Task { await model.buildMacroPlan() }
+                    } label: {
+                        Label("Build my program", systemImage: "chart.bar.fill")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.busy)
+                }
+                .frame(maxWidth: .infinity)
+                .cardStyle()
+            }
+        } else {
+            let weeks = model.macro
+            let actuals = actualByWeek
+            let finalLR = weeks.first { $0.isFinalLongRun }
+            let peak = weeks.map(\.targetKm).max() ?? 0
+            let taperCount = weeks.filter { ($0.phase ?? "") == "taper" }.count
+            let thisMondayKey = Calendar(identifier: .iso8601)
+                .dateInterval(of: .weekOfYear, for: .now)?.start.localDayKey ?? ""
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("THE PROGRAM", systemImage: "chart.bar.fill")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    Spacer()
+                    if let pos = weeks.firstIndex(where: { $0.localDayKey == thisMondayKey }) {
+                        Text("Week \(pos + 1) of \(weeks.count)")
+                            .font(.caption.weight(.bold)).foregroundStyle(Color.accentColor)
+                    }
+                    Button {
+                        Task { await model.buildMacroPlan() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise").font(.caption)
+                    }
+                    .disabled(model.busy)
+                }
+
+                Chart {
+                    ForEach(weeks) { w in
+                        BarMark(
+                            x: .value("Week", w.startDate, unit: .weekOfYear),
+                            y: .value("Target", w.targetKm)
+                        )
+                        .foregroundStyle(Self.phaseColor(w.phase)
+                            .opacity(w.is_cutback == true ? 0.4 : (w.localDayKey < thisMondayKey ? 0.55 : 0.9)))
+                        .annotation(position: .top, spacing: 1) {
+                            if w.isRaceWeek {
+                                Text("🏁").font(.system(size: 10))
+                            } else if w.isFinalLongRun {
+                                Image(systemName: "flag.fill")
+                                    .font(.system(size: 7)).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    // actuals ride on top — did you run the program?
+                    ForEach(weeks.filter { actuals[$0.localDayKey] ?? 0 > 0 }) { w in
+                        PointMark(
+                            x: .value("Week", w.startDate, unit: .weekOfYear),
+                            y: .value("Actual", actuals[w.localDayKey] ?? 0)
+                        )
+                        .symbolSize(26)
+                        .foregroundStyle(.primary)
+                    }
+                }
+                .frame(height: 150)
+                .chartYAxis { AxisMarks(position: .trailing) }
+
+                HStack(spacing: 12) {
+                    legendDot(.teal, "Base"); legendDot(.accentColor, "Build")
+                    legendDot(.orange, "Peak"); legendDot(.purple, "Taper")
+                    Spacer()
+                    Label("actual", systemImage: "circle.fill")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Text(blockFooter(peak: peak, finalLR: finalLR, taperCount: taperCount))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .cardStyle()
+        }
+    }
+
+    private func legendDot(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 3) {
+            Circle().fill(color.opacity(0.9)).frame(width: 7, height: 7)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func blockFooter(peak: Double, finalLR: MacroWeek?, taperCount: Int) -> String {
+        var parts = [String(format: "Peak %.0f km/wk", peak)]
+        if let f = finalLR, let lr = f.long_run_km, lr > 0 {
+            parts.append(String(format: "final long run ~%.0f km (w/c %@)", lr,
+                                f.startDate.formatted(.dateTime.day().month(.abbreviated))))
+        }
+        parts.append("\(taperCount)-week taper")
+        parts.append("dimmed bars = cutback weeks")
+        return parts.joined(separator: " · ")
     }
 
     // MARK: M7 Phase 5 — goal trajectory (required vs projected VDOT)

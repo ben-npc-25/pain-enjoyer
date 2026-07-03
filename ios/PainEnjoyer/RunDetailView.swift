@@ -31,7 +31,11 @@ struct RunDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                RunTypeChip(type: run.runClass(zones: zones))
+                if run.isRun {
+                    RunTypeChip(type: run.runClass(zones: zones))
+                } else {
+                    ActivityChip(run: run) // M8: hikes/rides sync too
+                }
                 Spacer()
                 Text(run.source_app ?? "").font(.caption).foregroundStyle(.tertiary)
             }

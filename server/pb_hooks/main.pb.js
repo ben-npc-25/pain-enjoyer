@@ -100,10 +100,17 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
 
     const state = engine.computeEngineState($app);
 
-    // M5: red light → pull today's planned workout (code decides, the
-    // message below explains).
-    const pulled = plan.pullTodayIfRed($app, state);
-    if (pulled) console.log("pulled today's " + pulled.was_type + " " + pulled.was_km + " km (red light)");
+    // M5→M8: red light → EASE today's planned workout, never cancel it
+    // (code decides, the message below explains).
+    const eased = plan.adaptTodayIfRed(
+      $app, state, state.vdot.available ? state.vdot.zones_sec : null
+    );
+    if (eased) {
+      console.log(
+        "eased today's " + eased.was_type + " " + eased.was_km +
+        " km to " + eased.now_km + " km easy (red light)"
+      );
+    }
 
     // M5: adaptive proactivity — engagement score decides today's cadence.
     const engagement = require(`${__hooks}/engagement.js`);
@@ -114,7 +121,7 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
       since === null ||
       (eng.level === "every_2_3_days" && since >= 2) ||
       (eng.level === "weekly_digest" && since >= 7);
-    if (pulled || eng.changed) send = true; // never silently pull or downshift
+    if (eased || eng.changed) send = true; // never silently modify or downshift
     if (!send) {
       console.log("morning-coach: quiet day (cadence " + eng.level + ", score " + eng.score + ")");
       return;
@@ -125,11 +132,13 @@ cronAdd("morning-coach", $os.getenv("COACH_CRON_UTC") || "0 22 * * *", () => {
       "recent run is more than 3 days old, don't analyze a stale run — speak " +
       "to where the athlete is right now (the traffic light and athlete " +
       "status tell you).";
-    if (pulled) {
+    if (eased) {
       notes +=
-        "\nIMPORTANT: you just PULLED today's planned " + pulled.was_type + " " +
-        pulled.was_km + " km because the light is red. Lead with that — " +
-        "explain why plainly and give the recovery alternative.";
+        "\nIMPORTANT: you just EASED today's planned " + eased.was_type + " " +
+        eased.was_km + " km down to " + eased.now_km + " km easy because the " +
+        "light is red. Lead with that — explain plainly which signal drove it, " +
+        "make clear the program continues (this is an adjustment, not a stop), " +
+        "and that skipping today entirely is also fine if they feel off.";
     }
     if (eng.changed) {
       notes +=
@@ -176,6 +185,24 @@ onRecordAfterCreateSuccess((e) => {
   }
   e.next();
 }, "runs");
+
+// ── M9: profile saved → keep the block anchored to the (possibly new) race ──
+// Pure engine math (no LLM), so running it on every profile save is free.
+// Race added → block appears; race date moved → block rebuilds; race removed
+// → block cleared. The app refreshes macro_weeks right after saving.
+
+onRecordAfterUpdateSuccess((e) => {
+  try {
+    const engine = require(`${__hooks}/engine.js`);
+    const plan = require(`${__hooks}/plan.js`);
+    const macro = require(`${__hooks}/macro.js`);
+    const m = macro.ensure(e.app, engine, plan);
+    if (m.regenerated) console.log("profile change → block re-anchored: " + m.reason);
+  } catch (err) {
+    console.log("macro ensure on profile save failed:", String(err));
+  }
+  e.next();
+}, "athlete_profile");
 
 // ── POST /api/coach/replan ─────────────────────────────────────────────
 // M7 Phase 2: manually trigger a mid-week re-plan (the app's "re-plan now"
@@ -428,6 +455,33 @@ routerAdd(
   $apis.requireAuth()
 );
 
+// ── POST /api/coach/macro-plan ─────────────────────────────────────────
+// M9: (re)generate the goal-anchored training block — the program from today
+// to race day. Pure engine math, zero LLM cost. The app's "Build my program"
+// button; the Sunday cron keeps it re-anchored via macro.ensure().
+
+routerAdd(
+  "POST",
+  "/api/coach/macro-plan",
+  (e) => {
+    try {
+      const engine = require(`${__hooks}/engine.js`);
+      const plan = require(`${__hooks}/plan.js`);
+      const macro = require(`${__hooks}/macro.js`);
+      const coach = require(`${__hooks}/coach.js`);
+
+      const r = macro.generate(e.app, engine, plan);
+      if (r.skipped) return e.json(400, { error: r.reason });
+      coach.saveCoachMessage(e.app, "plan_change", "New training block: " + r.summary, "engine");
+      return e.json(200, r);
+    } catch (err) {
+      console.log("macro-plan failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
 // ── POST /api/coach/plan-week ──────────────────────────────────────────
 // M3: generate (or regenerate) next week's plan. Optional ?start=YYYY-MM-DD
 // (a Monday) to target a specific week. Code owns the rails; LLM the words.
@@ -480,6 +534,23 @@ cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => 
     const coach = require(`${__hooks}/coach.js`);
 
     if (!coach.latestRunFacts($app)) return;
+
+    // M9: the block first — create it if missing, re-anchor it if reality
+    // drifted or the race moved. The week below is planned INSIDE it.
+    try {
+      const macro = require(`${__hooks}/macro.js`);
+      const m = macro.ensure($app, engine, plan);
+      if (m.regenerated) {
+        coach.saveCoachMessage(
+          $app, "plan_change",
+          "Training block updated (" + m.reason + "): " + m.summary, "engine"
+        );
+        console.log("weekly-plan: block re-anchored — " + m.reason);
+      }
+    } catch (err) {
+      console.log("macro ensure failed (weekly plan continues):", String(err));
+    }
+
     // Sunday cron plans the UPCOMING week (generateWeek now defaults to the
     // current week, so pass next Monday explicitly).
     const result = plan.generateWeek($app, llm, persona, engine, plan.nextMonday(new Date()), coach.conversationText($app, 8));

@@ -69,11 +69,23 @@ grant HealthKit access. The app then:
 Code computes, the LLM judges (PLAN.md §1). `server/pb_hooks/engine.js` derives,
 from real history only:
 
+- **The macro training block (M9 — the core product)**: one deterministic
+  program from today to race day. Volume arc with cutback weeks, a long-run
+  curve that grows without breaking the athlete, the final long run, and a
+  race-length taper. `POST /api/coach/macro-plan` builds it (zero LLM);
+  `macro_weeks` stores it; the weekly generator executes inside it; the
+  Sunday cron re-anchors it when reality drifts or the race moves.
 - **VDOT + pace zones** (Daniels–Gilbert; best effort in 90 d; E/M/T/I/R paces)
-- **ACWR** (7-day vs 28-day distance load; flags spike / detraining / no-base)
+- **ACWR** (7-day vs 28-day distance load; flags spike / detraining / no-base;
+  M8: **rebuilding** — a comeback after a break is judged against the 180-day
+  peak baseline, not the collapsed 28-day average, so it never false-flags as
+  a load spike)
 - **Recovery score 0–100** (today's HRV / resting HR / sleep vs personal 60-day median)
-- **80/20 check** (share of running time at easy HR over 28 d)
-- **🟢🟡🔴 traffic light** (worst severity wins; injured-flag in the profile pins it 🔴)
+- **80/20 check** (share of running time at easy HR over 28 d; only flags with ≥5 runs)
+- **🟢🟡🔴 traffic light** (worst severity wins; exports machine-readable
+  `drivers`. M8: the light is a *dial on today's stress, never a program
+  switch* — a red day downgrades to short easy running, it never cancels the
+  plan; injury is a soft signal the coach weighs, not a light driver)
 
 `GET /api/coach/engine` (auth) returns the full state; its `for_llm` projection
 (strings only — see gotcha below) rides along in every coach prompt and is

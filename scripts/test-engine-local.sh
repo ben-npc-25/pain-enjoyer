@@ -563,5 +563,208 @@ gt = json.load(sys.stdin)["goal_trajectory"]
 assert gt["status"] == "on_track", gt
 print("  ✓ 7:00 goal → on_track (needs %.1f, projected %.1f, trend %+.1f/mo)" % (gt["required_vdot"], gt["projected_vdot"], gt["trend_per_month"]))'
 
+# ── 14. M8: comeback after a break must NOT read as a load spike ─────────
+# Reproduces the real bug: a month mostly off collapses the 28-day chronic, so
+# 8 km of careful comeback running reads as ACWR 2.67 → red → program
+# cancelled. M8: chronic < 50% of the established 180-day baseline + running
+# again = "rebuilding", judged against the baseline. Cross-training (a hike)
+# must be visible to the coach but stay out of ALL running math.
+echo "· M8: comeback ≠ load spike (rebuilding state)…"
+
+# recovery today → healthy (so the light reflects load logic only)
+REC_ID=$(curl -fsS -G "$BASE/api/collections/recovery_daily/records" \
+  --data-urlencode "sort=-date" --data-urlencode "perPage=1" -H "Authorization: $TOKEN" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
+curl -fsS -X PATCH "$BASE/api/collections/recovery_daily/records/$REC_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"hrv_sdnn_ms":61,"resting_hr":50,"sleep_hours":7.5}' >/dev/null
+
+# carve the break: remove all runs inside the 28-day window
+for uuid in smoke-12 smoke-14 smoke-15 smoke-22 smoke-26; do
+  RID=$(curl -fsS -G "$BASE/api/collections/runs/records" \
+    --data-urlencode "filter=healthkit_uuid = '$uuid'" --data-urlencode "perPage=1" \
+    -H "Authorization: $TOKEN" | python3 -c 'import sys,json;i=json.load(sys.stdin)["items"];print(i[0]["id"] if i else "")')
+  [[ -n "$RID" ]] && curl -fsS -X DELETE "$BASE/api/collections/runs/records/$RID" -H "Authorization: $TOKEN"
+done
+
+# the established base (~2 months back): peak 28-day window = 56 km → 14.0 km/wk
+BASE_RUNS="
+60 15000 5400 140
+64 12000 4350 138
+68 15000 5460 141
+75 14000 5100 139
+"
+while read -r d m s hr; do
+  [[ -z "$d" ]] && continue
+  post runs "{\"date\":\"$(day "$d")T07:30:00.000Z\",\"distance_m\":$m,\"duration_s\":$s,
+    \"avg_hr\":$hr,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"m8-base-$d\"}"
+done <<< "$BASE_RUNS"
+
+# the careful comeback: 8 km this week (d4 wins VDOT → zones not stale),
+# 4 km three weeks ago → chronic (12 km / 4) = 3.0 km/wk, acute 8.0 km.
+# Old math: ACWR 8.0/3.0 = 2.67 → red "danger spike". New: rebuilding.
+COMEBACK="
+1 4500 1710 145
+4 3500 1050 155
+20 4000 1560 140
+"
+while read -r d m s hr; do
+  [[ -z "$d" ]] && continue
+  post runs "{\"date\":\"$(day "$d")T07:30:00.000Z\",\"distance_m\":$m,\"duration_s\":$s,
+    \"avg_hr\":$hr,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"m8-back-$d\"}"
+done <<< "$COMEBACK"
+
+# a hike (cross-training) — visible to the coach, out of the running math
+post runs "{\"date\":\"$(day 2)T09:00:00.000Z\",\"distance_m\":10000,\"duration_s\":10800,
+  \"avg_hr\":110,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"m8-hike-2\",\"activity_type\":\"hiking\"}"
+
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" > "$WORK/engine-m8.json"
+python3 - "$WORK/engine-m8.json" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+fails = []
+def expect(label, got, want):
+    ok = got == want
+    print(("  ✓" if ok else "  ✗") + f" {label}: {got!r}" + ("" if ok else f"  (expected {want!r})"))
+    if not ok: fails.append(label)
+a = s["acwr"]
+expect("acwr.state", a["state"], "rebuilding")
+expect("acwr.acute_week_km", a["acute_week_km"], 8.0)
+expect("acwr.chronic_weekly_km", a["chronic_weekly_km"], 3.0)
+expect("acwr.baseline_weekly_km", a["baseline_weekly_km"], 14.0)
+# THE fix: old code read this as ACWR 2.67 → red → all-rest program
+expect("traffic_light.light", s["traffic_light"]["light"], "green")
+expect("traffic_light.drivers", s["traffic_light"]["drivers"], [])
+expect("rebuilding reason", "rebuilding" in s["traffic_light"]["reasons"][0], True)
+# intensity guard: 3 runs w/ HR is too small a sample to flag 80/20
+expect("intensity not flagged", any("intensity" in d for d in s["traffic_light"]["drivers"]), False)
+# cross-training: coach sees the hike; running math does not
+expect("for_llm.cross_training mentions hike", "hiking" in s["for_llm"].get("cross_training", ""), True)
+expect("hike outside run count", s["history"]["runs_180d"], 10)
+if fails:
+    print(f"✗ M8 REBUILDING CHECK FAILED: {', '.join(fails)}"); sys.exit(1)
+print("  ✓ comeback = rebuilding (green), hike visible but out of run math")
+PYEOF
+
+# plan generation during a rebuild: graduated cap min(12, max(8×1.3, 14×0.35))
+# = 10 km — a real training week, never an all-rest week.
+curl -fsS -X POST "$BASE/api/coach/plan-week?start=${NEXT_WEEK[0]}" -H "Authorization: $TOKEN" > "$WORK/plan-m8.json"
+python3 - "$WORK/plan-m8.json" <<'PYEOF'
+import json, sys
+p = json.load(open(sys.argv[1]))
+assert p["cap_km"] == 10, ("rebuilding cap should be 10", p["cap_km"])
+nonrest = [d for d in p["days"] if d["type"] != "rest"]
+assert nonrest, "rebuilding week must contain real training days"
+total = sum(d["distance_km"] for d in p["days"])
+assert total <= 10.5, total
+print("  ✓ rebuilding week: cap 10 km, %d training days, %.1f km — program continues" % (len(nonrest), total))
+PYEOF
+
+# ramping back too fast (14 km acute > 60% of the 14 km/wk base) → yellow, not red
+post runs "{\"date\":\"$(day 2)T18:00:00.000Z\",\"distance_m\":6000,\"duration_s\":2280,
+  \"avg_hr\":150,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"m8-fast-2\"}"
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+s = json.load(sys.stdin)
+t = s["traffic_light"]
+assert s["acwr"]["state"] == "rebuilding", s["acwr"]
+assert t["light"] == "yellow", (t["light"], t["reasons"])
+assert "ramp_fast" in t["drivers"], t["drivers"]
+print("  ✓ over-eager ramp (14 km vs 14 km/wk base) → yellow ramp_fast, still not red")'
+
+# ── 15. M9: the goal-anchored training block (macro plan) ────────────────
+# The program IS the product: one deterministic block from today to race day —
+# volume arc + cutbacks, long-run curve, final long run, race-length taper —
+# and the weekly generator must plan INSIDE it. Zero LLM cost.
+echo "· M9: macro training block…"
+
+curl -fsS -X POST "$BASE/api/coach/macro-plan" -H "Authorization: $TOKEN" > "$WORK/macro.json"
+python3 - "$WORK/macro.json" <<'PYEOF'
+import json, sys, datetime
+r = json.load(open(sys.argv[1]))
+assert not r.get("skipped"), r
+weeks = r["weeks"]
+
+# span: this Monday → the race's Monday, inclusive (race 2027-01-24 in fixture)
+today = datetime.date.today()
+mon_today = today - datetime.timedelta(days=today.weekday())
+race = datetime.date(2027, 1, 24)
+mon_race = race - datetime.timedelta(days=race.weekday())
+n = (mon_race - mon_today).days // 7 + 1
+assert len(weeks) == n, (len(weeks), n)
+assert weeks[0]["week_start"] == str(mon_today), weeks[0]
+
+# week 1 starts where the athlete IS (rebuilding cap 12, computed in §14)
+assert weeks[0]["target_km"] == 12, weeks[0]
+
+# marathon → 3-week taper; last week is race week; final LR right before taper
+assert [w["phase"] for w in weeks[-3:]] == ["taper", "taper", "taper"], [w["phase"] for w in weeks[-3:]]
+assert weeks[-1]["milestone"] == "race_week" and weeks[-1]["long_run_km"] == 0, weeks[-1]
+flr = weeks[n - 4]
+assert flr["milestone"] == "final_long_run", flr
+assert flr["long_run_km"] == max(w["long_run_km"] for w in weeks), flr  # the peak LR
+
+# volume: ceiling respected (baseline 14 → ceiling 20), taper descends
+assert all(w["target_km"] <= 20 for w in weeks), max(w["target_km"] for w in weeks)
+assert weeks[-1]["target_km"] < weeks[-3]["target_km"], [w["target_km"] for w in weeks[-3:]]
+# structure: cutback weeks exist and are easier than their neighbours
+cuts = [i for i, w in enumerate(weeks) if w["is_cutback"]]
+assert cuts, "no cutback weeks in a %d-week block" % n
+i = cuts[0]
+assert weeks[i]["target_km"] < weeks[i - 1]["target_km"], (weeks[i - 1], weeks[i])
+assert all(0 <= w["quality_sessions"] <= 2 for w in weeks)
+print("  ✓ block: %d weeks, 12→%d km/wk, %d cutbacks, final LR %d km, 3-wk taper, race week last"
+      % (n, max(w["target_km"] for w in weeks), len(cuts), flr["long_run_km"]))
+print("  ✓ summary: " + r["summary"])
+PYEOF
+
+# the block is announced in the plan feed (kind plan_change, engine-made)
+curl -fsS -G "$BASE/api/collections/coach_messages/records" \
+  --data-urlencode "filter=kind = 'plan_change' && provider = 'engine'" \
+  --data-urlencode "perPage=1" -H "Authorization: $TOKEN" |
+  python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["totalItems"] >= 1 and "training block" in r["items"][0]["content"].lower(); print("  ✓ block announced as a plan_change message (provider=engine, no LLM)")'
+
+# the engine now carries the block in every prompt
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+s = json.load(sys.stdin)
+m = s["macro_week"]
+assert m and m["week_number"] == 1, m
+assert "training_block" in s["for_llm"] and "block week 1 of" in s["for_llm"]["training_block"], s["for_llm"]
+print("  ✓ engine: macro_week present, for_llm.training_block =", json.dumps(s["for_llm"]["training_block"])[:80] + "…")'
+
+# weekly generation executes the block: next week = block week 2 (13 km) but
+# the reactive cap (12) still bounds it — min() wins; macro rides in the result
+curl -fsS -X POST "$BASE/api/coach/plan-week?start=${NEXT_WEEK[0]}" -H "Authorization: $TOKEN" > "$WORK/plan-m9.json"
+python3 - "$WORK/plan-m9.json" <<'PYEOF'
+import json, sys
+p = json.load(open(sys.argv[1]))
+assert p["macro"] is not None, "weekly plan did not see the block"
+assert p["cap_km"] == 12, ("cap = min(reactive 12, block 13)", p["cap_km"])
+assert p["phase"] == p["macro"]["phase"], (p["phase"], p["macro"])
+total = sum(d["distance_km"] for d in p["days"])
+assert total <= 12.5, total
+print("  ✓ weekly plan executes block week 2: phase %s, cap 12 km, %.1f km planned"
+      % (p["phase"], total))
+PYEOF
+
+# re-anchor: race date moves → ensure() rebuilds the block around the new date
+NEW_RACE="2027-03-14"
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d "{\"race_date\":\"${NEW_RACE}T00:00:00.000Z\"}" >/dev/null
+curl -fsS -G "$BASE/api/collections/macro_weeks/records" \
+  --data-urlencode "sort=-week_start" --data-urlencode "perPage=1" -H "Authorization: $TOKEN" |
+  NEW_RACE="$NEW_RACE" python3 -c '
+import sys, json, os, datetime
+race = datetime.date.fromisoformat(os.environ["NEW_RACE"])
+mon = race - datetime.timedelta(days=race.weekday())
+last = json.load(sys.stdin)["items"][0]
+assert last["week_start"].startswith(str(mon)), (last["week_start"], str(mon))
+assert last["milestone"] == "race_week", last
+print("  ✓ race moved → profile-save hook re-anchored the block to week of", str(mon))'
+
 echo
-echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) — all passed"
+echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) + M8 rebuilding + M9 macro block — all passed"

@@ -11,12 +11,14 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $model.selectedTab) {
+            // M9: the app is a marathon PLANNER — the program leads, everything
+            // else supports executing it.
+            PlanView(model: model)
+                .tabItem { Label("Program", systemImage: "chart.bar.doc.horizontal") }
+                .tag(AppModel.AppTab.plan)
             CoachHomeView(model: model)
                 .tabItem { Label("Coach", systemImage: "figure.run") }
                 .tag(AppModel.AppTab.coach)
-            PlanView(model: model)
-                .tabItem { Label("Plan", systemImage: "list.clipboard") }
-                .tag(AppModel.AppTab.plan)
             CalendarTabView(model: model)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(AppModel.AppTab.calendar)

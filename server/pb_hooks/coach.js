@@ -34,6 +34,7 @@ function latestRunFacts(app) {
 
   return {
     date: run.getString("date"),
+    activity: run.getString("activity_type") || "running", // M8: may be a hike/ride/…
     distance_km: Math.round(distKm * 100) / 100,
     duration_min: Math.round((durS / 60) * 10) / 10,
     avg_pace: pace, // pre-formatted "5:47 min/km" — the only pace the LLM sees

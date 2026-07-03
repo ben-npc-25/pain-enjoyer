@@ -30,7 +30,9 @@ final class SyncEngine {
                 .sorted { $0.date > $1.date }
             for run in fresh {
                 var r = run
-                r.splits = await HealthKitService.shared.splitsForRun(uuid: run.healthkit_uuid)
+                if r.activity_type == "running" { // M8: splits are a running concept
+                    r.splits = await HealthKitService.shared.splitsForRun(uuid: run.healthkit_uuid)
+                }
                 if try await pb.uploadRun(r) { uploaded += 1 }
             }
         }

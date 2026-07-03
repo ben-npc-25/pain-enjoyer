@@ -22,7 +22,11 @@ function pushToSheet(app) {
   if (!url) return { skipped: true, reason: "BACKUP_SHEET_URL not configured" };
   const secret = $os.getenv("BACKUP_SHEET_SECRET") || "";
 
-  const recs = app.findRecordsByFilter("runs", "id != ''", "-date", 2000, 0);
+  // M8: the sheet is a RUN log — cross-training rows (hikes, rides) stay out
+  // so the Apps Script's fixed columns keep meaning what they say.
+  const recs = app.findRecordsByFilter(
+    "runs", "activity_type = '' || activity_type = 'running'", "-date", 2000, 0
+  );
   const rows = [];
   for (const r of recs) {
     const distM = r.getFloat("distance_m"), durS = r.getFloat("duration_s");

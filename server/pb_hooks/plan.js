@@ -11,6 +11,10 @@
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const TYPES = ["E", "T", "I", "R", "MP", "LR", "rest"];
 
+// M8: cross-training rows (hikes, rides, …) share the runs collection but must
+// never satisfy a planned RUN or count toward the running cap.
+const RUNNING_ONLY = " && (activity_type = '' || activity_type = 'running')";
+
 function isoDay(d) {
   return d.toISOString().slice(0, 10);
 }
@@ -54,6 +58,15 @@ function weeklyCapKm(state, profile, ramp) {
   const effective = Math.max(chronic, baseline * 0.75);
   let cap = effective < 3 ? 15 : Math.round(effective * 1.15);
 
+  // M8: rebuilding (running again after a break, no explicit return date set)
+  // gets a graduated ramp instead of jumping straight to ~86% of the old base:
+  // next week ≤ 1.3× what was actually run this week, floored at 35% of the
+  // base so week one isn't microscopic. Grows week over week as acute grows.
+  if (state.acwr.state === "rebuilding") {
+    const acute = state.acwr.acute_week_km || 0;
+    cap = Math.min(cap, Math.round(Math.max(acute * 1.3, baseline * 0.35)));
+  }
+
   // M7: the athlete's explicit weekly target overrides the engine default —
   // his call — but bounded by a safety ceiling (1.5× his established base) so a
   // post-layoff week can't spike into injury territory. weeklyCapNote() reports
@@ -73,6 +86,27 @@ function weeklyCapNote(state, profile, cap) {
   return cap < target
     ? "your weekly target " + target + " km safety-capped to " + cap + " km (build gradually)"
     : "honoring your weekly target (" + cap + " km)";
+}
+
+// M9: the macro block's row for a given week_idx, or null (no block yet /
+// collection missing pre-migration). plan.js reads rows directly — it never
+// requires macro.js (one-directional dependency).
+function loadMacroWeek(app, idx) {
+  try {
+    const rows = app.findRecordsByFilter("macro_weeks", "week_idx = " + idx, "", 1, 0);
+    if (!rows.length) return null;
+    const r = rows[0];
+    return {
+      phase: r.getString("phase"),
+      target_km: r.getFloat("target_km"),
+      long_run_km: r.getFloat("long_run_km"),
+      quality_sessions: r.getFloat("quality_sessions"),
+      is_cutback: r.getBool("is_cutback"),
+      milestone: r.getString("milestone"),
+    };
+  } catch (_) {
+    return null;
+  }
 }
 
 function pacesForType(type, zonesSec) {
@@ -126,7 +160,7 @@ function distanceifyDescription(type, description, zonesSec) {
   };
 }
 
-function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace, ramp, convo) {
+function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace, ramp, convo, macroWk) {
   const constraints = {
     week_dates: weekDates,
     training_phase: phase,
@@ -139,6 +173,17 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     return_to_run: ramp
       ? { ramp_week: ramp.week, of: ramp.of, easy_only: ramp.no_quality }
       : null,
+    // M9: this week's slice of the macro training block — the plan executes
+    // the block, it doesn't reinvent it.
+    training_block: macroWk
+      ? {
+          phase: macroWk.phase,
+          long_run_target_km: macroWk.long_run_km,
+          quality_sessions_max: macroWk.quality_sessions,
+          is_cutback_week: macroWk.is_cutback,
+          milestone: macroWk.milestone || null,
+        }
+      : null,
   };
   return (
     "Plan training for the dates in week_dates (may be the rest of this week, not 7 days). " +
@@ -149,6 +194,14 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     "Rules: injured = a niggle to weigh, not forced rest. return_to_run = deliberate low cap, don't exceed, " +
     "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds. " +
     "If run_days is set, schedule runs ONLY on those weekdays and rest the others (server enforces).\n" +
+    (macroWk
+      ? "This week executes the training block above: long run ≈ long_run_target_km, at most " +
+        "quality_sessions_max quality sessions" +
+        (macroWk.is_cutback ? ", CUTBACK week — deliberately easier, do not compensate" : "") +
+        (macroWk.milestone === "final_long_run" ? ", this is the FINAL LONG RUN of the block — say so" : "") +
+        (macroWk.milestone === "race_week" ? ", RACE WEEK — short sharpeners only, race day is the event" : "") +
+        ".\n"
+      : "") +
     "STRICT JSON only, no fences:\n" +
     '{"rationale":"2-4 sentences","days":[{"date":"YYYY-MM-DD","type":"E|T|I|R|MP|LR|rest","distance_km":0,"description":"..."}]}' +
     "\nExactly one entry per date in week_dates, in order. Workout paces are " +
@@ -363,10 +416,16 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
     weeksToRace = Math.round((race.getTime() - monday.getTime()) / (7 * 86400000));
     if (weeksToRace < 0) weeksToRace = null; // race already happened
   }
-  const phase = phaseFor(weeksToRace);
+  // M9: the macro block owns this week's shape when it exists — the weekly
+  // plan executes the block. min() with the reactive cap so a block target
+  // can never outrun what the athlete has actually been running (missed
+  // weeks pull next week down; macro.ensure() re-anchors the block on drift).
+  const macroWk = loadMacroWeek(app, idx);
+  const phase = macroWk && macroWk.phase ? macroWk.phase : phaseFor(weeksToRace);
   // Phase 6: ramp anchored to the week being PLANNED (its Monday).
   const ramp = engine.returnRampPlan(profile, monday, state.chronic_baseline_km);
-  const fullCap = weeklyCapKm(state, profile, ramp);
+  let fullCap = weeklyCapKm(state, profile, ramp);
+  if (macroWk && macroWk.target_km > 0) fullCap = Math.min(fullCap, macroWk.target_km);
 
   // Partial (current) week: subtract km already run + run-days already used this
   // week, so the regenerated remainder still fits the weekly cap + day budget.
@@ -374,7 +433,7 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
   if (genDates.length < 7) {
     const runRecs = app.findRecordsByFilter(
       "runs",
-      "date >= '" + weekDates[0] + " 00:00:00.000Z' && date < '" + todayStr + " 00:00:00.000Z'",
+      "date >= '" + weekDates[0] + " 00:00:00.000Z' && date < '" + todayStr + " 00:00:00.000Z'" + RUNNING_ONLY,
       "date", 50, 0
     );
     const dayKeys = {};
@@ -388,7 +447,7 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
   const remMaxDays = Math.max(0, ((profile && profile.days_per_week) || 5) - pastRunDays);
   const noQuality = !!(ramp && ramp.no_quality);
 
-  const prompt = buildPrompt(engine.forLLM(state), profile, genDates, capKm, phase, weeksToRace, ramp, convo || "");
+  const prompt = buildPrompt(engine.forLLM(state), profile, genDates, capKm, phase, weeksToRace, ramp, convo || "", macroWk);
   let parsed;
   try {
     parsed = parsePlanJSON(llm.generate("weekly", persona, prompt));
@@ -403,6 +462,19 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
   // M7: surface how the athlete's weekly target was handled (honored/capped).
   const capNote = weeklyCapNote(state, profile, fullCap);
   if (capNote) plan.adjustments.push(capNote);
+
+  // M9: hold the long run to the block's target (±20% is judgment, above it
+  // is the LLM re-planning the block — clamp and say so).
+  if (macroWk && macroWk.long_run_km > 0) {
+    const lrDay = plan.days.find(function (d) { return d.type === "LR"; });
+    if (lrDay && lrDay.distance_km > macroWk.long_run_km * 1.2) {
+      plan.adjustments.push(
+        lrDay.date + ": long run " + lrDay.distance_km + " km → " + macroWk.long_run_km +
+        " km (block target — the long-run curve is how we build without breaking you)"
+      );
+      lrDay.distance_km = macroWk.long_run_km;
+    }
+  }
 
   // attach code-computed pace targets (LLM never chose these) + Phase 3 rail:
   // rewrite any time-based reps to distance.
@@ -428,6 +500,7 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
     phase: phase,
     cap_km: capKm,
     ramp_week: ramp ? ramp.week : null, // M7 Phase 6: null unless ramping back
+    macro: macroWk, // M9: the block slice this week executed (null = no block)
     days: plan.days,
     rationale: plan.rationale,
     adjustments: plan.adjustments,
@@ -450,7 +523,7 @@ function reconcile(app) {
     const day = wo.getString("date").slice(0, 10);
     const runs = app.findRecordsByFilter(
       "runs",
-      "date >= '" + day + " 00:00:00.000Z' && date <= '" + day + " 23:59:59.000Z'",
+      "date >= '" + day + " 00:00:00.000Z' && date <= '" + day + " 23:59:59.000Z'" + RUNNING_ONLY,
       "", 5, 0
     );
     if (runs.length > 0) {
@@ -470,9 +543,12 @@ function reconcile(app) {
   return { done: done, skipped: skipped };
 }
 
-// M5: red light → the coach pulls today's planned workout (deterministic;
-// the morning message explains it). Returns what was pulled, or null.
-function pullTodayIfRed(app, state) {
+// M5→M8: red light → the coach ADAPTS today's planned workout instead of
+// cancelling it (deterministic; the morning message explains it). The app's
+// whole purpose is getting the athlete to the race — a red day downgrades
+// (quality → easy, volume halved), it never scraps the program. Returns what
+// changed, or null.
+function adaptTodayIfRed(app, state, zonesSec) {
   if (!state.traffic_light || state.traffic_light.light !== "red") return null;
   const day = isoDay(new Date());
   const wos = app.findRecordsByFilter(
@@ -484,14 +560,19 @@ function pullTodayIfRed(app, state) {
     const t = wo.getString("type");
     if (t === "rest") continue;
     const km = Math.round((wo.getFloat("distance_m") / 1000) * 10) / 10;
+    const newKm = Math.max(2, Math.round(km * 0.5 * 10) / 10);
+    const p = pacesForType("E", zonesSec || null);
     wo.set("status", "modified");
-    wo.set("type", "rest");
-    wo.set("distance_m", 0);
+    wo.set("type", "E");
+    wo.set("distance_m", Math.round(newKm * 1000));
+    if (p.low) wo.set("target_pace_low_skm", p.low);
+    if (p.high) wo.set("target_pace_high_skm", p.high);
     wo.set("description",
-      "⛔ Coach pulled this (red light): was " + t + " " + km + " km — " +
+      "🔻 Coach eased this (red light): was " + t + " " + km + " km, now " +
+      newKm + " km easy — skip it entirely if you feel off. " +
       wo.getString("description"));
     app.save(wo);
-    return { was_type: t, was_km: km };
+    return { was_type: t, was_km: km, now_km: newKm };
   }
   return null;
 }
@@ -535,7 +616,7 @@ function assessReplan(app, state, weekMonday, today, capKm, kmDone) {
   );
   const runs = app.findRecordsByFilter(
     "runs",
-    "date >= '" + weekStart + " 00:00:00.000Z' && date <= '" + weekEnd + " 23:59:59.000Z'",
+    "date >= '" + weekStart + " 00:00:00.000Z' && date <= '" + weekEnd + " 23:59:59.000Z'" + RUNNING_ONLY,
     "date", 50, 0
   );
   const plannedById = {};
@@ -679,7 +760,7 @@ function replanRemainder(app, llm, persona, engine, coach, opts) {
   // km already done this week (from real runs) and this week's cap
   const runs = app.findRecordsByFilter(
     "runs",
-    "date >= '" + weekStart + " 00:00:00.000Z' && date <= '" + weekEnd + " 23:59:59.000Z'",
+    "date >= '" + weekStart + " 00:00:00.000Z' && date <= '" + weekEnd + " 23:59:59.000Z'" + RUNNING_ONLY,
     "date", 50, 0
   );
   let kmDone = 0;
@@ -789,10 +870,14 @@ module.exports = {
   generateWeek: generateWeek,
   reconcile: reconcile,
   nextMonday: nextMonday,
-  pullTodayIfRed: pullTodayIfRed,
+  adaptTodayIfRed: adaptTodayIfRed,
   replanRemainder: replanRemainder,
+  // shared week math (macro.js builds the block on these — one-directional:
+  // plan.js never requires macro.js, it reads macro_weeks rows directly)
+  _weeklyCapKm: weeklyCapKm,
+  _weekIdx: weekIdx,
+  _mondayOf: mondayOf,
   // exposed for tests
   _sanitizePlan: sanitizePlan,
-  _weeklyCapKm: weeklyCapKm,
   _pacesForType: pacesForType,
 };

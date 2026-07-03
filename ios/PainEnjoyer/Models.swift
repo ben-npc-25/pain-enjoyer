@@ -26,6 +26,7 @@ struct RunPayload: Codable {
     var elevation_gain_m: Double?
     var source_app: String
     var healthkit_uuid: String
+    var activity_type: String = "running" // M8: hikes/rides/… sync too
     var splits: [RunSplit]? = nil // M7 Phase 4: per-km splits when the data supports it
 }
 
@@ -43,6 +44,27 @@ struct RunRecord: Codable, Identifiable, Hashable {
     var coach_note: String? // M7: the coach's reaction to THIS run (not in chat)
     var splits: [RunSplit]? // M7 Phase 4: per-km splits (may be absent/empty)
     var healthkit_uuid: String? // M6: route lookup for the map
+    var activity_type: String? // M8: ""/"running" = run; else "hiking", "cycling", …
+
+    /// True for real runs and pre-M8 rows (which are all runs).
+    var isRun: Bool {
+        let t = activity_type ?? ""
+        return t.isEmpty || t == "running"
+    }
+
+    /// "Run" / "Hike" / "Ride" / … for cards and detail titles.
+    var activityLabel: String {
+        switch activity_type ?? "" {
+        case "", "running": return "Run"
+        case "hiking": return "Hike"
+        case "walking": return "Walk"
+        case "cycling": return "Ride"
+        case "swimming": return "Swim"
+        case "strength": return "Strength"
+        case "yoga": return "Yoga"
+        default: return (activity_type ?? "activity").capitalized
+        }
+    }
 
     /// 1–5 if the athlete rated this run's effort, else nil (PB stores unrated as 0).
     var effortRating: Int? {
@@ -218,7 +240,8 @@ enum RunClass {
 
 extension RunRecord {
     var effortVDOT: Double? {
-        guard distance_m >= 3000, duration_s >= 720 else { return nil }
+        // VDOT is a running metric — a 3 km hike would chart as absurd fitness.
+        guard isRun, distance_m >= 3000, duration_s >= 720 else { return nil }
         return danielsVDOT(distanceM: distance_m, durationS: duration_s)
     }
 
@@ -241,6 +264,26 @@ extension RunRecord {
 }
 
 /// plan_weeks row — phase + the coach's rationale for the week.
+// MARK: - M9: the macro training block (one row per week, today → race week)
+
+struct MacroWeek: Codable, Identifiable, Hashable {
+    var id: String
+    var week_idx: Double
+    var week_start: String
+    var phase: String?
+    var target_km: Double?
+    var long_run_km: Double?
+    var quality_sessions: Double?
+    var is_cutback: Bool?
+    var milestone: String? // "", "final_long_run", "race_week"
+
+    var startDate: Date { RunRecord.pbDateFormatter.date(from: week_start) ?? .distantPast }
+    var localDayKey: String { String(week_start.prefix(10)) }
+    var targetKm: Double { target_km ?? 0 }
+    var isFinalLongRun: Bool { milestone == "final_long_run" }
+    var isRaceWeek: Bool { milestone == "race_week" }
+}
+
 struct PlanWeek: Codable, Identifiable {
     var id: String
     var week_idx: Double?

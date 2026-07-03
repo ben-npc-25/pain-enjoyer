@@ -83,7 +83,7 @@ struct TrendsView: View {
         let cal = Calendar.current
         guard let thisWeek = cal.dateInterval(of: .weekOfYear, for: .now)?.start else { return [] }
         var byWeek: [Date: Double] = [:]
-        for run in model.runs {
+        for run in model.runs where run.isRun { // M8: hikes don't inflate run volume
             guard let wk = cal.dateInterval(of: .weekOfYear, for: run.startDate)?.start else { continue }
             byWeek[wk, default: 0] += run.distanceKm
         }

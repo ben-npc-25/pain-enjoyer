@@ -134,7 +134,11 @@ struct CoachHomeView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(String(format: "%.2f km", run.distanceKm))
                             .font(.system(size: 30, weight: .heavy, design: .rounded))
-                        RunTypeChip(type: run.runClass(zones: model.zonesSec))
+                        if run.isRun {
+                            RunTypeChip(type: run.runClass(zones: model.zonesSec))
+                        } else {
+                            ActivityChip(run: run) // M8: hikes/rides sync too
+                        }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.footnote.bold()).foregroundStyle(.tertiary)

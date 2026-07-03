@@ -32,6 +32,9 @@ final class AppModel: ObservableObject {
     // M6: plan weeks (rationale/phase) for the Plan tab
     @Published var planWeeks: [PlanWeek] = []
 
+    // M9: the macro training block — the program from today to race day
+    @Published var macro: [MacroWeek] = []
+
     var zonesSec: [String: Double]? { engine?.vdot.zones_sec }
 
     func trendsReview() async {
@@ -50,7 +53,8 @@ final class AppModel: ObservableObject {
 
     // M5: tab routing + chat prefill (quick check-ins, "ask about workout")
     enum AppTab: Hashable { case coach, plan, calendar, trends, chat }
-    @Published var selectedTab: AppTab = .coach
+    // M9: the program is the product — the app opens on it.
+    @Published var selectedTab: AppTab = .plan
     @Published var chatPrefill = ""
 
     func openChat(prefill: String = "") {
@@ -119,7 +123,17 @@ final class AppModel: ObservableObject {
     /// Full refresh. READ the server first so your saved data always shows —
     /// even if a HealthKit sync is slow (e.g. a big re-import). The sync runs
     /// AFTER, in the background, so it can never blank the screen again.
+    ///
+    /// SwiftUI's .refreshable cancels its task as soon as the spinner
+    /// dismisses or the view re-renders — that cancellation used to abort the
+    /// in-flight fetches and leave "✗ cancelled" on screen. The real work runs
+    /// in an unstructured task (immune to the gesture's cancellation).
     func refresh(syncHealth: Bool = true) async {
+        let work = Task { await self.performRefresh(syncHealth: syncHealth) }
+        await work.value
+    }
+
+    private func performRefresh(syncHealth: Bool) async {
         busy = true; defer { busy = false }
         do {
             status = status.isEmpty ? "Loading…" : status
@@ -135,6 +149,7 @@ final class AppModel: ObservableObject {
             async let messagesReq = pb.listMessages()
             async let recoveryReq = pb.listRecoveryFull()
             async let weeksReq = pb.listPlanWeeks()
+            async let macroReq = pb.listMacro()
             async let profileReq = pb.getProfile()
 
             runs = try await runsReq
@@ -144,11 +159,16 @@ final class AppModel: ObservableObject {
             if let m = try? await messagesReq { messages = m }
             if let r = try? await recoveryReq { recovery = r }
             if let w = try? await weeksReq { planWeeks = w }
+            if let m = try? await macroReq { macro = m }
             do {
                 profile = try await profileReq // nil = no row → onboarding
                 profileLoaded = true
             } catch { /* unreachable/odd response — don't trigger onboarding */ }
             saveCache()
+            if status == "Loading…" { status = "" }
+        } catch is CancellationError {
+            if status == "Loading…" { status = "" } // a cancelled pull is not an error
+        } catch let e as URLError where e.code == .cancelled {
             if status == "Loading…" { status = "" }
         } catch {
             status = "✗ \(error.localizedDescription)"
@@ -276,11 +296,16 @@ final class AppModel: ObservableObject {
             status = "Coach is updating your plan…"
             let pb = try await client()
             let week = try await pb.generateWeek()
+            // Refetch everything the update touches, so the change is VISIBLE
+            // (the old code left the rationale card stale — "nothing happened").
             planned = (try? await pb.listPlanned()) ?? planned
-            status = "Updated plan from \(week.week_start) (\(week.phase), cap \(Int(week.cap_km)) km)"
+            planWeeks = (try? await pb.listPlanWeeks()) ?? planWeeks
+            engine = (try? await pb.engineState()) ?? engine
+            let why = week.rationale.isEmpty ? "" : " — \(week.rationale.prefix(140))"
+            status = "Plan updated: \(week.phase), \(Int(week.cap_km)) km cap, rest of this week\(why)"
             haptic()
         } catch {
-            status = "✗ \(error.localizedDescription)"
+            status = "✗ Plan update failed — \(error.localizedDescription)"
         }
     }
 
@@ -334,6 +359,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// M9: (re)build the goal-anchored training block. Deterministic server
+    /// math — instant, no LLM.
+    func buildMacroPlan() async {
+        busy = true; defer { busy = false }
+        do {
+            status = "Building your program…"
+            let pb = try await client()
+            try await pb.buildMacroPlan()
+            macro = (try? await pb.listMacro()) ?? macro
+            messages = (try? await pb.listMessages()) ?? messages
+            status = macro.isEmpty ? "" : "Program built — \(macro.count) weeks to race day"
+            haptic()
+        } catch {
+            status = "✗ \(error.localizedDescription)"
+        }
+    }
+
     func saveProfile(_ p: AthleteProfile) async {
         busy = true; defer { busy = false }
         do {
@@ -342,6 +384,7 @@ final class AppModel: ObservableObject {
             profile = try await pb.getProfile()
             profileLoaded = true
             engine = try? await pb.engineState() // injury flag changes the light
+            macro = (try? await pb.listMacro()) ?? macro // M9: race change re-anchors the block
             status = "Profile saved"
             haptic()
         } catch {
