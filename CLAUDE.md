@@ -161,6 +161,21 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   69 checks all pass (M9: structure, block→weekly integration, race-move
   re-anchor). **Deploy with M8's one-liner; install = unlock the phone first
   (it was reachable but locked — error 12040/10003).**
+- **M9.1 (2026-07-03, Ben's field report)**: re-planning erased his week —
+  `run_days` was set to days that excluded Fri/Sat/Sun, and the rail RESTED
+  every misplaced workout → all-rest despite a 23 km block week. Fixes:
+  ① run_days rail now **moves** workouts to free chosen days (LR relocates
+  first), rests only when no slot remains; ② **block long-run guarantee** —
+  if the plan lacks an LR, the block's LR target > 0, and no ≥80%-of-target
+  run landed yet, the biggest planned day is upgraded to LR (or an eligible
+  rest day claimed, preferring long_run_day), cap-safe, logged; ③ iOS: day
+  descriptions no longer clipped at 3 lines ("…" complaint), plan-update
+  status shortened (full rationale on the week card); ④ trends decode fix
+  (client read `review` as String; server sends an object since M6.1);
+  ⑤ pull-to-refresh no longer surfaces "✗ cancelled" (unstructured task).
+  NOTE: Ben's profile run_days is now EMPTY (unclear if he cleared it) — if
+  he re-sets it, include Saturday (his long_run_day). Suite: 16 sections
+  incl. move + LR-guarantee asserts.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from

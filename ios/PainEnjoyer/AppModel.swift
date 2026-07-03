@@ -301,8 +301,8 @@ final class AppModel: ObservableObject {
             planned = (try? await pb.listPlanned()) ?? planned
             planWeeks = (try? await pb.listPlanWeeks()) ?? planWeeks
             engine = (try? await pb.engineState()) ?? engine
-            let why = week.rationale.isEmpty ? "" : " — \(week.rationale.prefix(140))"
-            status = "Plan updated: \(week.phase), \(Int(week.cap_km)) km cap, rest of this week\(why)"
+            // keep the status short — the FULL rationale shows on the week card
+            status = "Plan updated ✓ \(week.phase), \(Int(week.cap_km)) km cap for the rest of this week — rationale on the week card below"
             haptic()
         } catch {
             status = "✗ Plan update failed — \(error.localizedDescription)"

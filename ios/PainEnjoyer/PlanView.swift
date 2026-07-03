@@ -401,7 +401,9 @@ struct PlanView: View {
                 statusIcon(wo.status ?? "planned")
             }
             if let d = wo.description, !d.isEmpty {
-                Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                // full text — clipped coach advice ("…") was unreadable (Ben)
+                Text(d).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 54)
             }
             HStack {

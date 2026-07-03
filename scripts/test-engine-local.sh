@@ -527,7 +527,12 @@ for d in p["days"]:
     if day not in allowed:
         assert d["type"] == "rest" and d["distance_km"] == 0, ("non-run day must rest", d)
 assert any("safety-capped" in a for a in p["adjustments"]), p["adjustments"]
-print("  ✓ runs only Mon/Wed/Fri, target 40 km safety-capped to 23 km, flagged")
+# M9.1: misplaced workouts MOVE to chosen days (LR relocates first) — the old
+# rest-them-out behavior erased training (once produced an all-rest week)
+kept = {d["type"] for d in p["days"] if d["type"] != "rest"}
+assert "LR" in kept and "T" in kept, ("LR and T must survive by moving", kept)
+assert any("moved to" in a for a in p["adjustments"]), p["adjustments"]
+print("  ✓ runs only Mon/Wed/Fri; Sun LR + Tue T MOVED to chosen days (not erased); 40 km capped to 23")
 PYEOF
 # reset so later sections see the baseline athlete
 curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
@@ -765,6 +770,30 @@ last = json.load(sys.stdin)["items"][0]
 assert last["week_start"].startswith(str(mon)), (last["week_start"], str(mon))
 assert last["milestone"] == "race_week", last
 print("  ✓ race moved → profile-save hook re-anchored the block to week of", str(mon))'
+
+# M9.1: the block's long run is guaranteed. run_days=Tuesday only strands the
+# mock's Sunday LR (no free chosen slot → dropped), so the deterministic
+# guarantee must resurrect it by upgrading the surviving day to LR at the
+# block's target (5 km for this block week).
+echo "· M9.1: block long-run guarantee…"
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"run_days":"Tuesday"}' >/dev/null
+curl -fsS -X POST "$BASE/api/coach/plan-week?start=${NEXT_WEEK[0]}" -H "Authorization: $TOKEN" > "$WORK/plan-lrg.json"
+python3 - "$WORK/plan-lrg.json" <<'PYEOF'
+import json, sys, datetime
+p = json.load(open(sys.argv[1]))
+nonrest = [d for d in p["days"] if d["type"] != "rest"]
+assert len(nonrest) == 1, [(d["date"], d["type"]) for d in p["days"]]
+d = nonrest[0]
+assert datetime.date.fromisoformat(d["date"]).weekday() == 1, d  # Tuesday
+assert d["type"] == "LR", d
+assert d["distance_km"] == p["macro"]["long_run_km"], (d, p["macro"])
+assert any("long run was missing" in a for a in p["adjustments"]), p["adjustments"]
+print("  ✓ stranded long run resurrected: Tue → LR %.0f km (block target), flagged" % d["distance_km"])
+PYEOF
+curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"run_days":""}' >/dev/null
 
 echo
 echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) + M8 rebuilding + M9 macro block — all passed"

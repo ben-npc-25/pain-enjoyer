@@ -275,16 +275,31 @@ function sanitizePlan(raw, weekDates, capKm, profile, opts) {
     }
   }
 
-  // M7: enforce the athlete's chosen run days — rest anything scheduled on a
-  // non-run day. This governs the schedule, so the count-based demotion below
-  // is skipped when run_days is set.
+  // M7→M9: enforce the athlete's chosen run days. A workout on a non-chosen
+  // day is MOVED to a free chosen day — resting it outright deleted training
+  // (once erased a whole remaining week, long run included, and the block's
+  // 25 km target produced 0 km). Long run relocates first (the week's key
+  // session); only when no chosen slot remains does a workout become rest.
+  // This governs the schedule, so the count-based demotion below is skipped
+  // when run_days is set.
   if (hasRunDays) {
-    for (const d of days) {
-      const wd = WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()];
-      if (!runDaySet[wd] && d.type !== "rest") {
-        adjustments.push(d.date + " → rest (not a chosen run day)");
+    const isChosen = (d) => !!runDaySet[WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()]];
+    const passes = [(d) => d.type === "LR", (d) => d.type !== "LR"];
+    for (const match of passes) {
+      for (const d of days) {
+        if (d.type === "rest" || isChosen(d) || !match(d)) continue;
+        const slot = days.find((s) => s.type === "rest" && isChosen(s));
+        if (slot) {
+          adjustments.push(d.date + " (" + d.type + ") moved to " + slot.date + " (your chosen run day)");
+          slot.type = d.type;
+          slot.distance_km = d.distance_km;
+          slot.description = d.description;
+        } else {
+          adjustments.push(d.date + " (" + d.type + ") → rest (not a chosen run day, no free run day left)");
+        }
         d.type = "rest";
         d.distance_km = 0;
+        d.description = "Rest day.";
       }
     }
   }
@@ -429,7 +444,7 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
 
   // Partial (current) week: subtract km already run + run-days already used this
   // week, so the regenerated remainder still fits the weekly cap + day budget.
-  let kmDone = 0, pastRunDays = 0;
+  let kmDone = 0, pastRunDays = 0, maxRunKm = 0;
   if (genDates.length < 7) {
     const runRecs = app.findRecordsByFilter(
       "runs",
@@ -438,7 +453,9 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
     );
     const dayKeys = {};
     for (const r of runRecs) {
-      kmDone += (r.getFloat("distance_m") || 0) / 1000;
+      const km = (r.getFloat("distance_m") || 0) / 1000;
+      kmDone += km;
+      if (km > maxRunKm) maxRunKm = km;
       dayKeys[r.getString("date").slice(0, 10)] = 1;
     }
     pastRunDays = Object.keys(dayKeys).length;
@@ -473,6 +490,53 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
         " km (block target — the long-run curve is how we build without breaking you)"
       );
       lrDay.distance_km = macroWk.long_run_km;
+    }
+
+    // ... and guarantee it EXISTS. The block's long run is the week's key
+    // session; if the LLM (or a rail) dropped it and it hasn't been run yet,
+    // put it back deterministically — upgrade the biggest planned run, or
+    // claim a rest day (preferring the configured long-run day / chosen days).
+    const lrTarget = macroWk.long_run_km;
+    const alreadyRun = maxRunKm >= 0.8 * lrTarget; // a long run already landed this week
+    if (!lrDay && !alreadyRun && capKm >= Math.min(lrTarget, 3)) {
+      const total = plan.days.reduce(function (s, d) { return s + d.distance_km; }, 0);
+      const biggest = plan.days
+        .filter(function (d) { return d.type !== "rest"; })
+        .sort(function (a, b) { return b.distance_km - a.distance_km; })[0];
+      if (biggest) {
+        const km = Math.round(Math.min(lrTarget, biggest.distance_km + Math.max(0, capKm - total)) * 10) / 10;
+        plan.adjustments.push(
+          biggest.date + " (" + biggest.type + " " + biggest.distance_km + " km) → LR " + km +
+          " km (the block's long run was missing from this week)"
+        );
+        biggest.type = "LR";
+        biggest.distance_km = km;
+      } else {
+        // all-rest plan: claim an eligible rest day
+        const runDaySet2 = {};
+        if (profile && profile.run_days) {
+          String(profile.run_days).split(",").forEach(function (d) { if (d.trim()) runDaySet2[d.trim()] = 1; });
+        }
+        const hasRunDays2 = Object.keys(runDaySet2).length > 0;
+        const lrdName = (profile && profile.long_run_day) || "Sunday";
+        const eligible = plan.days.filter(function (d) {
+          const wd = WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()];
+          return !hasRunDays2 || runDaySet2[wd];
+        });
+        const slot =
+          eligible.find(function (d) {
+            return WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()] === lrdName;
+          }) || eligible[eligible.length - 1];
+        const km = Math.round(Math.min(lrTarget, capKm) * 10) / 10;
+        if (slot && km >= 2) {
+          plan.adjustments.push(
+            slot.date + ": rest → LR " + km + " km (the block's long run was missing from this week)"
+          );
+          slot.type = "LR";
+          slot.distance_km = km;
+          slot.description = "Long run, easy pace — the block's key session this week (~" + km + " km).";
+        }
+      }
     }
   }
 
