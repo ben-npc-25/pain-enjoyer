@@ -8,7 +8,9 @@ final class SyncEngine {
     static let shared = SyncEngine()
     private init() {}
 
-    private let recoverySeededKey = "recovery.seeded.v1"
+    // v2 (M10): body mass joined the payload — re-seed once so the 60-day
+    // window backfills weight into rows that already exist on the server.
+    private let recoverySeededKey = "recovery.seeded.v2"
 
     /// Returns the number of newly uploaded runs.
     @discardableResult
@@ -94,7 +96,9 @@ final class SyncEngine {
         for p in payloads {
             let day = String(p.date.prefix(10))
             if let id = idByDay[day] {
-                if day >= recentCutoff { try await pb.updateRecovery(id: id, p) }
+                // seed pass upserts everything (backfills new fields into old
+                // rows); steady state only re-pushes the finalizing recent days
+                if !seeded || day >= recentCutoff { try await pb.updateRecovery(id: id, p) }
             } else {
                 try await pb.createRecovery(p)
             }

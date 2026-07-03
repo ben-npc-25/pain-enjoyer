@@ -65,6 +65,8 @@ final class HealthKitService {
             HKQuantityType(.heartRateVariabilitySDNN),
             HKQuantityType(.restingHeartRate),
             HKQuantityType(.vo2Max),
+            HKQuantityType(.bodyMass), // M10: weight → fueling personalization
+
             HKCategoryType(.sleepAnalysis),
             // M6: GPS route for the run-detail map
             HKSeriesType.workoutRoute(),
@@ -287,12 +289,14 @@ final class HealthKitService {
                                      unit: HKUnit.count().unitDivided(by: .minute()), days: days)
         async let sleep = dailySleepHours(days: days)
         async let vo2 = dailyLatestVo2Max(days: days)
-        let (hrvByDay, rhrByDay, sleepByDay, vo2ByDay) = await (hrv, rhr, sleep, vo2)
+        async let mass = dailyLatestBodyMass(days: days) // M10
+        let (hrvByDay, rhrByDay, sleepByDay, vo2ByDay, massByDay) = await (hrv, rhr, sleep, vo2, mass)
 
         var dayKeys = Set(hrvByDay.keys)
         dayKeys.formUnion(rhrByDay.keys)
         dayKeys.formUnion(sleepByDay.keys)
         dayKeys.formUnion(vo2ByDay.keys)
+        dayKeys.formUnion(massByDay.keys)
 
         return dayKeys.sorted().map { day in
             RecoveryPayload(
@@ -300,9 +304,34 @@ final class HealthKitService {
                 hrv_sdnn_ms: hrvByDay[day],
                 resting_hr: rhrByDay[day],
                 sleep_hours: sleepByDay[day].map { ($0 * 10).rounded() / 10 },
-                vo2max: vo2ByDay[day]
+                vo2max: vo2ByDay[day],
+                body_mass_kg: massByDay[day]
             )
         }.filter(\.hasAnyMetric)
+    }
+
+    /// M10: latest weigh-in per local day, in kg.
+    private func dailyLatestBodyMass(days: Int) async -> [String: Double] {
+        let now = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -days, to: now)!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: [])
+        let samples: [HKQuantitySample] = (try? await withCheckedThrowingContinuation { cont in
+            let q = HKSampleQuery(sampleType: HKQuantityType(.bodyMass),
+                                  predicate: predicate, limit: HKObjectQueryNoLimit,
+                                  sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate,
+                                                                     ascending: true)]) { _, s, error in
+                if let error { cont.resume(throwing: error) }
+                else { cont.resume(returning: (s as? [HKQuantitySample]) ?? []) }
+            }
+            store.execute(q)
+        }) ?? []
+
+        let kg = HKUnit.gramUnit(with: .kilo)
+        var out: [String: Double] = [:]
+        for s in samples { // ascending → last weigh-in per day wins
+            out[s.startDate.localDayKey] = (s.quantity.doubleValue(for: kg) * 10).rounded() / 10
+        }
+        return out
     }
 
     /// Per-local-day discrete average of a quantity type.

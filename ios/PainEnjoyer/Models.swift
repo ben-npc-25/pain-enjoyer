@@ -188,6 +188,7 @@ struct RecoveryFull: Codable, Identifiable {
     var resting_hr: Double?
     var sleep_hours: Double?
     var vo2max: Double?
+    var body_mass_kg: Double? // M10
 
     var day: Date { RunRecord.pbDateFormatter.date(from: date) ?? .distantPast }
 }
@@ -321,9 +322,11 @@ struct RecoveryPayload: Codable {
     var resting_hr: Double?
     var sleep_hours: Double?
     var vo2max: Double?
+    var body_mass_kg: Double? // M10: weight — personalizes fueling opinions
 
     var hasAnyMetric: Bool {
-        hrv_sdnn_ms != nil || resting_hr != nil || sleep_hours != nil || vo2max != nil
+        hrv_sdnn_ms != nil || resting_hr != nil || sleep_hours != nil
+            || vo2max != nil || body_mass_kg != nil
     }
 }
 

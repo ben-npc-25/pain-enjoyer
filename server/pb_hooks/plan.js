@@ -193,7 +193,8 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     "Constraints (server clamps violations):\n" + JSON.stringify(constraints) + "\n" +
     "Rules: injured = a niggle to weigh, not forced rest. return_to_run = deliberate low cap, don't exceed, " +
     "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds. " +
-    "If run_days is set, schedule runs ONLY on those weekdays and rest the others (server enforces).\n" +
+    "If run_days is set, schedule runs ONLY on those weekdays and rest the others (server enforces). " +
+    "For long runs likely over 75 minutes, end the description with one fueling sentence using ONLY the fueling_guidelines figures from the engine facts.\n" +
     (macroWk
       ? "This week executes the training block above: long run ≈ long_run_target_km, at most " +
         "quality_sessions_max quality sessions" +

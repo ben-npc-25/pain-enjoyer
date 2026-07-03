@@ -837,5 +837,21 @@ assert "benchmark effort week of" in r["summary"], r["summary"]
 print("  ✓ stale VDOT → benchmark scheduled in block week %d: %s" % (i + 1, weeks[i]["week_start"]))
 PYEOF
 
+# ── 17. M10: health coach (weight → snapshot + personalized fueling) ─────
+echo "· M10: health snapshot + fueling from body weight…"
+curl -fsS -X PATCH "$BASE/api/collections/recovery_daily/records/$REC_ID" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d '{"body_mass_kg":72.5}' >/dev/null
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" |
+  python3 -c '
+import sys, json
+f = json.load(sys.stdin)["for_llm"]
+assert "72.5 kg" in f.get("health_snapshot", ""), f.get("health_snapshot")
+fuel = f.get("fueling_guidelines", "")
+assert "30–60 g carbs/h" in fuel, fuel
+assert "22 g protein" in fuel, fuel          # 72.5 × 0.3 → 22 (post-session)
+assert "580–725 g carbs/day" in fuel, fuel   # 72.5 × 8–10 (race-week load)
+print("  ✓ health_snapshot 72.5 kg; fueling personalized (22 g protein, 580–725 g carb load)")'
+
 echo
-echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) + M8 rebuilding + M9 macro block — all passed"
+echo "✔ engine + M3 plan/chat + M4 memory + M5 engagement + M6 trends + M7(1,2,3,5,6) + M8 rebuilding + M9 macro block + M10 health — all passed"

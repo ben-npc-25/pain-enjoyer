@@ -187,7 +187,23 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   projection; surfaced in prompts, plan rules, block summary, and the chart
   (⏱). Ben's block needs a rebuild tap (↻) to pick the benchmark up. Suite:
   17 sections.
-- **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block).
+- **M10 built + tested (2026-07-03)**: health-coach layer (Ben: "a coach that
+  also takes care of your health, nutrition opinions"). **Body weight** syncs
+  daily (recovery_daily.body_mass_kg, migration 1783209600; iOS seed key
+  bumped → recovery.seeded.v2 so the 60-day window backfills weight into
+  existing rows once). Engine: `health_snapshot` (weight + ≥21-day trend) and
+  `fueling_guidelines` — deterministic, weight-personalized strings (30–60 g
+  carbs/h >75 min; post-session 0.3 g/kg protein + 1 g/kg carbs; race-week
+  8–10 g/kg carb load) in every prompt; generic fallback when no weigh-ins.
+  Persona: health section (reads HRV/RHR/sleep/VO₂max/weight as whole-person
+  signals; fueling opinions quote ONLY provided figures; not-a-doctor rule
+  for persistent anomalies). Weekly plan: long runs >75 min end with one
+  fueling sentence. Trends: Weight chart (90 d) + "weight" key in the
+  trends-review JSON. LLM cost: zero new calls. Needs weigh-ins in Apple
+  Health to personalize (no scale data = generic ranges + a nudge). Suite:
+  18 sections.
+- **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
+  +M10 health layer).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from
   here.

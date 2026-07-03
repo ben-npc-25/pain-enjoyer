@@ -26,6 +26,9 @@ struct TrendsView: View {
                     card("VO₂max", subtitle: "90 days — your health signal", note: "vo2max_health") {
                         recoveryChart(\.vo2max, unit: "ml/kg·min", color: .indigo, days: 90)
                     }
+                    card("Weight", subtitle: "90 days", note: "weight") { // M10
+                        recoveryChart(\.body_mass_kg, unit: "kg", color: .brown, days: 90)
+                    }
                     card("Effort score per run", subtitle: "single-run VDOT, 180 days", note: "fitness") { vdotChart }
                 }
                 .padding()

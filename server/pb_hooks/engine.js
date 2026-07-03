@@ -183,9 +183,53 @@ function loadRecovery(app, now, days) {
       rhr: r.getFloat("resting_hr") || null,
       sleep: r.getFloat("sleep_hours") || null,
       vo2max: r.getFloat("vo2max") || null,
+      mass: r.getFloat("body_mass_kg") || null, // M10
     });
   }
   return rows; // newest first
+}
+
+// ── health snapshot + fueling (M10) ─────────────────────────────────────
+// The coach also minds the whole person. Deterministic strings only — the
+// LLM voices opinions but every number here is computed from Ben's data
+// (gotcha #4: nothing numeric is left for the model to invent).
+
+function computeHealthFacts(rows, now) {
+  const weighed = rows.filter(function (r) { return r.mass > 0; }); // newest first
+  if (!weighed.length) return { snapshot: null, fueling: fuelingString(null) };
+  const latest = weighed[0];
+  // trend: compare to the oldest weigh-in at least 21 days back (if any)
+  let trend = "";
+  const old = weighed.filter(function (r) { return daysAgo(r.date, now) >= 21; });
+  if (old.length) {
+    const ref = old[0];
+    const d = round(latest.mass - ref.mass, 1);
+    trend =
+      d === 0
+        ? ", stable vs " + daysAgo(ref.date, now) + " days ago"
+        : ", " + (d > 0 ? "+" : "") + d + " kg vs " + daysAgo(ref.date, now) + " days ago";
+  }
+  const snapshot =
+    "weight " + round(latest.mass, 1) + " kg (weighed " + isoDay(latest.date) + trend + ")";
+  return { snapshot: snapshot, fueling: fuelingString(latest.mass) };
+}
+
+// Standard endurance sports-nutrition ranges; personalized by weight when
+// known. All figures pre-formatted here.
+function fuelingString(massKg) {
+  let s =
+    "runs over 75 min: 30–60 g carbs/h + 400–600 ml fluid/h" +
+    " (toward 60–90 g/h beyond 2.5 h)";
+  if (massKg > 0) {
+    s +=
+      "; within ~45 min after long/hard sessions: ~" + Math.round(massKg * 0.3) +
+      " g protein + ~" + Math.round(massKg * 1.0) + " g carbs" +
+      "; race-week carb load: " + Math.round(massKg * 8) + "–" + Math.round(massKg * 10) +
+      " g carbs/day for the final 2–3 days";
+  } else {
+    s += "; sync body weight (Apple Health) for gram targets personalized to the athlete";
+  }
+  return s;
 }
 
 function loadProfile(app) {
@@ -777,6 +821,9 @@ function computeEngineState(app) {
   // M9: where this week sits in the macro training block (null = no block).
   const macroWeek = loadMacroContext(app, now);
 
+  // M10: whole-person facts (weight trend + personalized fueling ranges).
+  const health = computeHealthFacts(recoveryRows, now);
+
   return {
     computed_at: now.toISOString(),
     profile: profile,
@@ -791,6 +838,7 @@ function computeEngineState(app) {
     return_ramp: returnRamp, // null unless actively ramping back
     goal_trajectory: trajectory, // M7 Phase 5
     macro_week: macroWeek, // M9: this week's slice of the training block
+    health: health, // M10: weight snapshot + fueling ranges (strings)
     traffic_light: trafficLight,
   };
 }
@@ -831,6 +879,10 @@ function forLLM(state) {
       "is staying active): " + state.cross_training.summary;
   }
   f.recovery = state.recovery.available ? state.recovery.summary : "unknown — " + state.recovery.reason;
+  if (state.health) {
+    if (state.health.snapshot) f.health_snapshot = state.health.snapshot;
+    f.fueling_guidelines = state.health.fueling;
+  }
   f.intensity_8020 = state.intensity.available ? state.intensity.summary : "unknown — " + state.intensity.reason;
   if (state.profile) {
     f.athlete_status = state.profile.injured
@@ -913,8 +965,15 @@ function trendFacts(app) {
   const vo2s = rec.filter(function (r) { return r.vo2max > 0; }); // newest first
   const vo2New = vo2s.length ? vo2s[0] : null;
   const vo2Old = vo2s.length > 1 ? vo2s[vo2s.length - 1] : null;
+  const masses = rec.filter(function (r) { return r.mass > 0; }); // newest first (M10)
+  const massNew = masses.length ? masses[0] : null;
+  const massOld = masses.length > 1 ? masses[masses.length - 1] : null;
 
   return {
+    weight: massNew
+      ? round(massNew.mass, 1) + " kg on " + isoDay(massNew.date) +
+        (massOld ? " (vs " + round(massOld.mass, 1) + " kg on " + isoDay(massOld.date) + ")" : "")
+      : "no weight data yet",
     weekly_volume_last_4: weeklyStr,
     hrv: hrv7 && hrvMed
       ? Math.round(hrv7) + " ms 7-day avg vs " + Math.round(hrvMed) + " ms 90-day median"

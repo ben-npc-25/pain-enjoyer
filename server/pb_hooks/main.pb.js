@@ -254,10 +254,11 @@ routerAdd(
         "\n\nTrend summaries (pre-computed): " + JSON.stringify(trends) +
         "\n\nThe athlete is reading their trend charts. Respond with STRICT JSON " +
         "only (no fences, no prose around it):\n" +
-        '{"volume":"…","hrv":"…","resting_hr":"…","vo2max_health":"…","fitness":"…"}\n' +
+        '{"volume":"…","hrv":"…","resting_hr":"…","vo2max_health":"…","weight":"…","fitness":"…"}\n' +
         "Each value: 1–2 plain sentences interpreting that specific chart for " +
         "this athlete. vo2max_health should read the VO2max + recovery picture " +
-        "as a personal-health signal. No greetings, no headings.";
+        "as a personal-health signal; weight reads the weight trend against " +
+        "training (fueling enough? losing/gaining on purpose?). No greetings, no headings.";
 
       let parsed;
       try {
@@ -267,7 +268,7 @@ routerAdd(
         parsed = llm.parseJSONLoose(llm.generate("trends", persona, prompt));
       }
       const clean = {};
-      ["volume", "hrv", "resting_hr", "vo2max_health", "fitness"].forEach(function (k) {
+      ["volume", "hrv", "resting_hr", "vo2max_health", "weight", "fitness"].forEach(function (k) {
         if (parsed && typeof parsed[k] === "string") clean[k] = parsed[k].slice(0, 600);
       });
       coach.saveCoachMessage(e.app, "weekly_review", JSON.stringify(clean), llm.provider());
