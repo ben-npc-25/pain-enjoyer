@@ -202,8 +202,20 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   trends-review JSON. LLM cost: zero new calls. Needs weigh-ins in Apple
   Health to personalize (no scale data = generic ranges + a nudge). Suite:
   18 sections.
+- **Web planner deployed & verified live (2026-07-06)**: `web/` — static SPA
+  (vanilla JS + hand-rolled SVG, no build step) served from PocketBase's
+  `pb_public` at `https://coach.bennpc.uk` — same origin, same users-collection
+  login, same API as the phone, so sync is automatic and the shared Cloudflare
+  tunnel was untouched. Tabs (deep-linkable via `/#calendar` etc.): Program
+  (light hero, race countdown + VDOT race-time predictions, block chart,
+  build/plan buttons), Calendar (planned vs actual, notes + effort editing),
+  Trends (SVG charts + Coach's read), Chat (fresh-slate 24 h, ✨ advice);
+  profile editor modal. Web opens count as engagement pings. deploy-server.sh
+  now ships `web/` → `/opt/pain-enjoyer/pb_public`. Smoke:
+  `./scripts/test-web-local.sh` (22 checks — static + login + every API call
+  the page makes; `--serve` keeps it up for manual poking).
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
-  +M10 health layer).
+  +M10 health layer, +web planner).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from
   here.
