@@ -235,6 +235,14 @@ Ben; he's technical and cost-conscious (target ≈ $0).
    it once turned decimal 5.79 into "5:79/km".
 5. Free Apple account: app install expires every 7 days; background sync dies
    silently with it. No remote push — coach messages are fetch-on-open.
+   **The 7 days run from the profile's MINT date, not the install date** —
+   Xcode reuses a still-valid cached profile on rebuild, so re-signing alone
+   extends nothing (app died 2026-07-06 three days after a fresh install).
+   `refresh-app.sh` now reads the embedded profile's ExpirationDate, deletes
+   cached profiles pre-build to force a fresh mint, and fails loudly if the
+   new profile has <3 days runway. Minting needs a live Xcode Apple-ID
+   session — "No Accounts" in the log means Ben must re-login in Xcode →
+   Settings → Accounts, then run `./scripts/refresh-app.sh --force`.
 6. PB cron runs in **UTC** (`COACH_CRON_UTC`, default 22:00 UTC = 06:00 HKT).
 
 ## House rules
