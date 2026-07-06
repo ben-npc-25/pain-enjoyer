@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pain Enjoyer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── login ─────────────────────────────────────────────────────────── -->
+<div id="login" class="login hidden">
+  <div class="login-card">
+    <h1 class="wordmark">Pain Enjoyer</h1>
+    <p class="login-sub">Sign in with the same account as the app.</p>
+    <input id="login-email" type="email" placeholder="Email" autocomplete="username">
+    <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="login-btn" class="btn btn-primary">Sign in</button>
+    <p id="login-err" class="login-err"></p>
+  </div>
+</div>
+
+<!-- ── app shell ─────────────────────────────────────────────────────── -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <span class="wordmark small">Pain Enjoyer</span>
+    <nav class="tabs">
+      <button data-tab="program" class="tab active">Program</button>
+      <button data-tab="calendar" class="tab">Calendar</button>
+      <button data-tab="trends" class="tab">Trends</button>
+      <button data-tab="chat" class="tab">Chat</button>
+    </nav>
+    <div class="topbar-right">
+      <button id="profile-btn" class="btn btn-ghost" title="Profile">⚙︎ Profile</button>
+      <button id="logout-btn" class="btn btn-ghost" title="Sign out">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-program" class="view"></section>
+    <section id="view-calendar" class="view hidden"></section>
+    <section id="view-trends" class="view hidden"></section>
+    <section id="view-chat" class="view hidden">
+      <div class="chat-wrap card">
+        <div id="chat-log" class="chat-log"></div>
+        <div class="chat-input-row">
+          <button id="chat-advise" class="btn btn-ghost" title="Ask for today's advice">✨</button>
+          <textarea id="chat-text" rows="1" placeholder="Message your coach…"></textarea>
+          <button id="chat-send" class="btn btn-primary">Send</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ── profile modal ─────────────────────────────────────────────────── -->
+<div id="profile-modal" class="modal hidden">
+  <div class="modal-card card">
+    <h2>Profile</h2>
+    <form id="profile-form">
+      <label>Race name <input name="race_name" type="text" placeholder="Tokyo Legacy Half"></label>
+      <label>Race date <input name="race_date" type="date"></label>
+      <label>Goal time (h:mm:ss) <input name="goal_time" type="text" placeholder="1:45:00"></label>
+      <label>Days per week <input name="days_per_week" type="number" min="0" max="7"></label>
+      <label>Long run day
+        <select name="long_run_day">
+          <option value="">—</option>
+          <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+          <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+        </select>
+      </label>
+      <fieldset class="run-days"><legend>Run days</legend>
+        <label><input type="checkbox" name="rd" value="Monday">Mon</label>
+        <label><input type="checkbox" name="rd" value="Tuesday">Tue</label>
+        <label><input type="checkbox" name="rd" value="Wednesday">Wed</label>
+        <label><input type="checkbox" name="rd" value="Thursday">Thu</label>
+        <label><input type="checkbox" name="rd" value="Friday">Fri</label>
+        <label><input type="checkbox" name="rd" value="Saturday">Sat</label>
+        <label><input type="checkbox" name="rd" value="Sunday">Sun</label>
+      </fieldset>
+      <label>Weekly target km <input name="weekly_target_km" type="number" min="0" step="1"></label>
+      <label>HR max <input name="hr_max" type="number" min="0" step="1"></label>
+      <label class="check"><input name="injured" type="checkbox"> Injured</label>
+      <label>Injury note <input name="injury_note" type="text"></label>
+      <label>Return-to-run date <input name="return_to_run_date" type="date"></label>
+      <div class="modal-actions">
+        <button type="button" id="profile-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+      <p id="profile-status" class="muted"></p>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

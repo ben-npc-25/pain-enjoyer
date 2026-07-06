@@ -35,20 +35,27 @@ if [[ -d /opt/pain-enjoyer ]]; then
   sudo cp "$REPO/server/pb_hooks/"*.js /opt/pain-enjoyer/pb_hooks/
   sudo mkdir -p /opt/pain-enjoyer/pb_migrations
   sudo cp "$REPO/server/pb_migrations/"*.js /opt/pain-enjoyer/pb_migrations/
+  # web app: PocketBase serves pb_public/ at the site root (same origin as the API)
+  sudo mkdir -p /opt/pain-enjoyer/pb_public
+  sudo cp "$REPO/web/"* /opt/pain-enjoyer/pb_public/
   sudo systemctl restart pain-enjoyer
   wait_for_health
 else
   # ── remote mode: Mac → Pi ─────────────────────────────────────────────
   PI="${1:-ben@suisei.local}"
-  echo "· syncing pb_hooks + pb_migrations → $PI:pain-enjoyer/server/"
+  echo "· syncing pb_hooks + pb_migrations + web → $PI:pain-enjoyer/"
   scp -q "$REPO/server/pb_hooks/"*.js "$PI:pain-enjoyer/server/pb_hooks/"
   scp -q "$REPO/server/pb_migrations/"*.js "$PI:pain-enjoyer/server/pb_migrations/"
+  ssh "$PI" 'mkdir -p ~/pain-enjoyer/web'
+  scp -q "$REPO/web/"* "$PI:pain-enjoyer/web/"
 
   echo "· installing into /opt/pain-enjoyer + restart…"
   ssh "$PI" 'set -e
     sudo cp ~/pain-enjoyer/server/pb_hooks/*.js /opt/pain-enjoyer/pb_hooks/
     sudo mkdir -p /opt/pain-enjoyer/pb_migrations
     sudo cp ~/pain-enjoyer/server/pb_migrations/*.js /opt/pain-enjoyer/pb_migrations/
+    sudo mkdir -p /opt/pain-enjoyer/pb_public
+    sudo cp ~/pain-enjoyer/web/* /opt/pain-enjoyer/pb_public/
     sudo systemctl restart pain-enjoyer
     for i in $(seq 1 20); do
       curl -fsS http://127.0.0.1:8090/api/coach/health >/dev/null 2>&1 && break
