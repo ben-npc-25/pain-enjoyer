@@ -1008,6 +1008,10 @@ function planCheckin(app, llm, persona, engine) {
     forecast = require(`${__hooks}/weather.js`).weekForecast(mondayIso, 7);
   } catch (_) {}
 
+  // NEXT week's slice of the block — the facts carry the CURRENT week, and a
+  // check-in about next week must describe next week (it may be a cutback).
+  const nextWk = loadMacroWeek(app, weekIdx(monday));
+
   // this week's adherence: what was planned vs what actually happened
   const thisMonIso = isoDay(mondayOf(new Date()));
   let done = 0, skipped = 0, pending = 0;
@@ -1029,7 +1033,17 @@ function planCheckin(app, llm, persona, engine) {
     "Today is " + new Date().toISOString().slice(0, 10) + ". You will plan the athlete's " +
     "next week (starting " + mondayIso + ") soon — but FIRST you check in, because the " +
     "athlete's answers shape the plan.\n" +
-    "Engine facts (quote, don't recompute):\n" + JSON.stringify(facts) + "\n" +
+    "Engine facts (quote, don't recompute; training_block there describes the CURRENT week):\n" + JSON.stringify(facts) + "\n" +
+    (nextWk
+      ? "NEXT week in the block (describe THIS one to the athlete): " + JSON.stringify({
+          phase: nextWk.phase,
+          target_km: nextWk.target_km,
+          long_run_target_km: nextWk.long_run_km,
+          quality_sessions_max: nextWk.quality_sessions,
+          is_cutback_week: nextWk.is_cutback,
+          milestone: nextWk.milestone || null,
+        }) + "\n"
+      : "") +
     "This week's adherence: " + done + " done, " + skipped + " skipped, " + pending + " still planned.\n" +
     (forecast ? "Next week's weather: " + forecast + "\n" : "") +
     "Write a SHORT pre-plan check-in: 1-2 sentences on where the program stands right now " +
