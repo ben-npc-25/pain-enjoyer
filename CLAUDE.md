@@ -214,8 +214,29 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   now ships `web/` → `/opt/pain-enjoyer/pb_public`. Smoke:
   `./scripts/test-web-local.sh` (22 checks — static + login + every API call
   the page makes; `--serve` keeps it up for manual poking).
+- **M11 deployed & verified live (2026-07-13) — Ben's frustration fixes
+  (he threatened to switch to OpenAI over these)**: ① **block continuity** —
+  macro rebuilds PRESERVE completed program weeks, regenerate only from this
+  Monday, cadence/benchmark placement count from the program's true start
+  ("re-anchored at week N of M", never week 1 again); only a race change
+  resets. Ben's live block backfilled with his 2 real completed weeks
+  (29.7 + 26.9 km) → now "week 3 of 16". ② **stale-zones yellow loop
+  broken** — his months-long yellow was zones_stale (106-d-old anchor);
+  yellow-shy LLM planned all-easy so the benchmark never ran. Now: benchmark
+  week FORCES a 3 km T session via the rails if the LLM omits it; persona +
+  plan prompt say yellow-from-stale-zones is cured by DOING the benchmark.
+  ③ **weather.js** — open-meteo forecast (free, no key; env WEATHER_LAT/LON/
+  LABEL, WEATHER_MODE=off for tests) rides into plan + check-in prompts.
+  ④ **pre-plan check-in** — Saturday cron (COACH_CHECKIN_CRON_UTC, default
+  10:00 UTC Sat) + POST /api/coach/plan-checkin: coach reports program
+  position (NEXT week's block slice) + asks 2-3 questions; answers are
+  BINDING in the plan prompt (kind=checkin_question, reused from M0 schema —
+  no migration). Suite: scripts/test-m11-local.sh (12 checks) + full suite
+  green. NOTE: recovery_daily has no fresh rows — Ben's phone still has the
+  OLD login after the 2026-07-13 credential change; recovery/weight facts
+  stay dark until he re-enters credentials in the iOS app settings.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
-  +M10 health layer, +web planner).
+  +M10 health layer, +web planner, +M11 continuity/check-in).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from
   here.
