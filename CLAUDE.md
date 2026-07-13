@@ -243,6 +243,11 @@ Ben; he's technical and cost-conscious (target ≈ $0).
    `require()`d modules (`coach.js`, `llm.js`), never top-level functions in
    `*.pb.js`.
 3. `.env` is bash-sourced — quote values with spaces (cron expressions).
+   Also: the service reads ONLY `/opt/pain-enjoyer/.env` (`EnvironmentFile=`);
+   editing `~/pain-enjoyer/server/.env` changes nothing live. And
+   `APP_USER_EMAIL/PASS` only *seed* the account at setup — changing them
+   later never touches the real PocketBase users record (bit Ben 2026-07-13;
+   fixed by PATCHing the user via superuser, then syncing both .env copies).
 4. Numbers going to the LLM must be pre-formatted strings ("5:47 min/km") —
    it once turned decimal 5.79 into "5:79/km".
 5. Free Apple account: app install expires every 7 days; background sync dies
