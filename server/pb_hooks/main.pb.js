@@ -502,7 +502,7 @@ routerAdd(
       // so "tell the coach, then hit Plan" actually changes the plan. Durable
       // facts still accrue via the daily distill cron + the memory block below.
       const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
-      const convo = coach.conversationText(e.app, 8);
+      const convo = coach.conversationText(e.app, 14);
 
       let start = null;
       const q = e.request.url.query().get("start");
@@ -520,6 +520,54 @@ routerAdd(
   },
   $apis.requireAuth()
 );
+
+// ── M11: pre-plan check-in ─────────────────────────────────────────────
+// The coach talks to the athlete BEFORE planning: where the program stands +
+// 2-3 questions whose answers shape the week. Saturday cron (evening HKT,
+// the day before the Sunday plan) + manual endpoint. Answers arrive in chat
+// and generateWeek treats them as binding preferences.
+
+routerAdd(
+  "POST",
+  "/api/coach/plan-checkin",
+  (e) => {
+    try {
+      const llm = require(`${__hooks}/llm.js`);
+      const memory = require(`${__hooks}/memory.js`);
+      const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock(e.app);
+      const engine = require(`${__hooks}/engine.js`);
+      const plan = require(`${__hooks}/plan.js`);
+      const coach = require(`${__hooks}/coach.js`);
+
+      if (!coach.latestRunFacts(e.app)) return e.json(400, { error: "no runs synced yet" });
+      const r = plan.planCheckin(e.app, llm, persona, engine);
+      coach.saveCoachMessage(e.app, "checkin_question", r.message, llm.provider());
+      return e.json(200, r);
+    } catch (err) {
+      console.log("plan-checkin failed:", String(err), err && err.stack ? String(err.stack) : "");
+      return e.json(502, { error: String(err) });
+    }
+  },
+  $apis.requireAuth()
+);
+
+cronAdd("plan-checkin", $os.getenv("COACH_CHECKIN_CRON_UTC") || "0 10 * * 6", () => {
+  try {
+    const llm = require(`${__hooks}/llm.js`);
+    const memory = require(`${__hooks}/memory.js`);
+    const persona = require(`${__hooks}/persona.js`).PERSONA + memory.memoryBlock($app);
+    const engine = require(`${__hooks}/engine.js`);
+    const plan = require(`${__hooks}/plan.js`);
+    const coach = require(`${__hooks}/coach.js`);
+
+    if (!coach.latestRunFacts($app)) return;
+    const r = plan.planCheckin($app, llm, persona, engine);
+    coach.saveCoachMessage($app, "checkin_question", r.message, llm.provider());
+    console.log("plan-checkin: sent for week " + r.week_start);
+  } catch (err) {
+    console.log("plan-checkin failed:", String(err));
+  }
+});
 
 // ── weekly plan cron ───────────────────────────────────────────────────
 // Sunday 10:00 UTC (= Sunday evening HKT): plan the week that starts Monday.
@@ -554,7 +602,7 @@ cronAdd("weekly-plan", $os.getenv("COACH_PLAN_CRON_UTC") || "0 10 * * 0", () => 
 
     // Sunday cron plans the UPCOMING week (generateWeek now defaults to the
     // current week, so pass next Monday explicitly).
-    const result = plan.generateWeek($app, llm, persona, engine, plan.nextMonday(new Date()), coach.conversationText($app, 8));
+    const result = plan.generateWeek($app, llm, persona, engine, plan.nextMonday(new Date()), coach.conversationText($app, 14));
     coach.saveCoachMessage(
       $app, "plan_change",
       "New week planned (" + result.phase + ", " + result.week_start + "): " + result.rationale,

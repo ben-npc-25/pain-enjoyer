@@ -78,7 +78,7 @@ function geminiGenerate(persona, prompt) {
 // Output-token ceilings per tier — Claude bills output far higher than input,
 // and Ben pays out of pocket, so cap tight to what each response actually needs
 // (a daily check-in is 3–6 sentences; a 7-day plan is small JSON). Override-able.
-const CLAUDE_MAX_TOKENS = { daily: 480, weekly: 1100, replan: 700, distill: 480, trends: 560 };
+const CLAUDE_MAX_TOKENS = { daily: 480, weekly: 1100, replan: 700, distill: 480, trends: 560, checkin: 400 };
 
 function claudeGenerate(tier, persona, prompt) {
   const key = $os.getenv("ANTHROPIC_API_KEY");

@@ -160,7 +160,7 @@ function distanceifyDescription(type, description, zonesSec) {
   };
 }
 
-function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace, ramp, convo, macroWk) {
+function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace, ramp, convo, macroWk, forecast) {
   const constraints = {
     week_dates: weekDates,
     training_phase: phase,
@@ -189,11 +189,17 @@ function buildPrompt(engineFacts, profile, weekDates, capKm, phase, weeksToRace,
     "Plan training for the dates in week_dates (may be the rest of this week, not 7 days). " +
     "Today " + new Date().toISOString().slice(0, 10) + ".\n" +
     "Engine facts (pre-computed; quote, don't recompute):\n" + JSON.stringify(engineFacts) + "\n" +
-    (convo ? "Recent chat — honor explicit requests that fit the constraints:\n" + convo + "\n" : "") +
+    (convo ? "Recent chat — the athlete's answers to your pre-plan check-in are BINDING " +
+      "preferences where the constraints allow; other explicit requests that fit the rails too:\n" + convo + "\n" : "") +
+    (forecast ? "Weather for these dates: " + forecast + "\n" : "") +
     "Constraints (server clamps violations):\n" + JSON.stringify(constraints) + "\n" +
     "Rules: injured = a niggle to weigh, not forced rest. return_to_run = deliberate low cap, don't exceed, " +
     "green ≠ push; easy_only ⇒ only E/LR (server enforces). I/T/R reps as DISTANCE (e.g. 6×600m), never minutes/seconds. " +
     "If run_days is set, schedule runs ONLY on those weekdays and rest the others (server enforces). " +
+    "A 🟡 caused by STALE PACE ZONES is fixed by DOING the scheduled benchmark, never by flattening the week " +
+    "to all-easy — yellow means easy-biased, not easy-only; keep the block's quality budget in play. " +
+    "If weather is given, place workouts around it (early start / hydration cue in the description on hot days, " +
+    "shuffle the long run off a storm day within the constraints) — adapt to weather, never cancel for it. " +
     "For long runs likely over 75 minutes, end the description with one fueling sentence using ONLY the fueling_guidelines figures from the engine facts.\n" +
     (macroWk
       ? "This week executes the training block above: long run ≈ long_run_target_km, at most " +
@@ -468,7 +474,13 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
   const remMaxDays = Math.max(0, ((profile && profile.days_per_week) || 5) - pastRunDays);
   const noQuality = !!(ramp && ramp.no_quality);
 
-  const prompt = buildPrompt(engine.forLLM(state), profile, genDates, capKm, phase, weeksToRace, ramp, convo || "", macroWk);
+  // M11: weather rides into the prompt (null on any failure — never blocks).
+  let forecast = null;
+  try {
+    forecast = require(`${__hooks}/weather.js`).weekForecast(genDates[0], genDates.length);
+  } catch (_) {}
+
+  const prompt = buildPrompt(engine.forLLM(state), profile, genDates, capKm, phase, weeksToRace, ramp, convo || "", macroWk, forecast);
   let parsed;
   try {
     parsed = parsePlanJSON(llm.generate("weekly", persona, prompt));
@@ -539,6 +551,50 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
           slot.type = "LR";
           slot.distance_km = km;
           slot.description = "Long run, easy pace — the block's key session this week (~" + km + " km).";
+        }
+      }
+    }
+  }
+
+  // M11: a benchmark week must actually CONTAIN the benchmark. Stale zones
+  // keep the light yellow, a yellow-shy LLM plans all-easy, the benchmark
+  // never happens, the zones stay stale — that loop held the program back for
+  // months. Deterministic cure: if this is the block's benchmark week and no
+  // T session survived the rails, convert an easy day (or claim a rest day).
+  if (macroWk && macroWk.milestone === "benchmark" && !noQuality) {
+    const hasT = plan.days.some(function (d) { return d.type === "T"; });
+    if (!hasT) {
+      const benchDesc =
+        "Benchmark: 3 km controlled steady effort (strong but not all-out) with easy " +
+        "warm-up and cool-down — this re-anchors your pace zones and race projection.";
+      const easies = plan.days.filter(function (d) { return d.type === "E"; });
+      const day = easies[Math.floor(easies.length / 2)];
+      if (day) {
+        plan.adjustments.push(
+          day.date + " (E) → T benchmark (stale zones are only fixed by running the benchmark)"
+        );
+        day.type = "T";
+        day.description = benchDesc;
+        const total = plan.days.reduce(function (s, d) { return s + d.distance_km; }, 0);
+        if (day.distance_km < 5 && total + (5 - day.distance_km) <= capKm + 1) day.distance_km = 5;
+      } else {
+        // no easy day to upgrade: claim an eligible rest day (same eligibility
+        // rules as the long-run guarantee — run_days govern)
+        const rdSet = {};
+        if (profile && profile.run_days) {
+          String(profile.run_days).split(",").forEach(function (d) { if (d.trim()) rdSet[d.trim()] = 1; });
+        }
+        const hasRd = Object.keys(rdSet).length > 0;
+        const slot = plan.days.find(function (d) {
+          const wd = WEEKDAYS[new Date(d.date + "T00:00:00Z").getUTCDay()];
+          return d.type === "rest" && (!hasRd || rdSet[wd]);
+        });
+        const total2 = plan.days.reduce(function (s, d) { return s + d.distance_km; }, 0);
+        if (slot && total2 + 5 <= capKm + 1) {
+          plan.adjustments.push(slot.date + ": rest → T benchmark (the block's benchmark week)");
+          slot.type = "T";
+          slot.distance_km = 5;
+          slot.description = benchDesc;
         }
       }
     }
@@ -934,9 +990,64 @@ function replanRemainder(app, llm, persona, engine, coach, opts) {
   };
 }
 
+// ── M11: pre-plan check-in ──────────────────────────────────────────────
+// "Knowing me is an important part of the respond cycle" (Ben, 2026-07-13).
+// Before the week is planned — Saturday cron or the manual endpoint — the
+// coach reports where the program stands and asks 2-3 pointed questions.
+// The athlete's answers land in chat, and generateWeek's prompt marks them
+// BINDING. One LLM call per week; weather and block position ride along.
+
+function planCheckin(app, llm, persona, engine) {
+  const state = engine.computeEngineState(app);
+  const facts = engine.forLLM(state);
+  const monday = nextMonday(new Date());
+  const mondayIso = isoDay(monday);
+
+  let forecast = null;
+  try {
+    forecast = require(`${__hooks}/weather.js`).weekForecast(mondayIso, 7);
+  } catch (_) {}
+
+  // this week's adherence: what was planned vs what actually happened
+  const thisMonIso = isoDay(mondayOf(new Date()));
+  let done = 0, skipped = 0, pending = 0;
+  try {
+    const rows = app.findRecordsByFilter(
+      "planned_workouts",
+      "date >= '" + thisMonIso + " 00:00:00.000Z' && date < '" + mondayIso + " 00:00:00.000Z' && type != 'rest'",
+      "date", 20, 0
+    );
+    for (const r of rows) {
+      const s = r.getString("status");
+      if (s === "done") done++;
+      else if (s === "skipped") skipped++;
+      else pending++;
+    }
+  } catch (_) {}
+
+  const prompt =
+    "Today is " + new Date().toISOString().slice(0, 10) + ". You will plan the athlete's " +
+    "next week (starting " + mondayIso + ") soon — but FIRST you check in, because the " +
+    "athlete's answers shape the plan.\n" +
+    "Engine facts (quote, don't recompute):\n" + JSON.stringify(facts) + "\n" +
+    "This week's adherence: " + done + " done, " + skipped + " skipped, " + pending + " still planned.\n" +
+    (forecast ? "Next week's weather: " + forecast + "\n" : "") +
+    "Write a SHORT pre-plan check-in: 1-2 sentences on where the program stands right now " +
+    "(block week, what next week is meant to hold — quality/long run/cutback/benchmark), then " +
+    "ask 2-3 pointed questions whose answers would actually change next week's plan: schedule " +
+    "constraints, how the body handled this week, appetite for the key session, weather " +
+    "preferences if relevant. No greeting, no sign-off, no plan yet — just the check-in.";
+
+  return {
+    message: llm.generate("checkin", persona, prompt),
+    week_start: mondayIso,
+  };
+}
+
 module.exports = {
   generateWeek: generateWeek,
   reconcile: reconcile,
+  planCheckin: planCheckin,
   nextMonday: nextMonday,
   adaptTodayIfRed: adaptTodayIfRed,
   replanRemainder: replanRemainder,

@@ -43,7 +43,12 @@ const TAPER_FRACTIONS = {
   1: [0.5],
 };
 
-function buildWeeks(state, profile, engine, plan, now) {
+// completedWeeks (M11): how many weeks of this SAME program already happened.
+// A mid-program rebuild continues the block — cutback cadence and benchmark
+// placement count from the program's true start, and the summary says
+// "continuing at week N", never "week 1" again.
+function buildWeeks(state, profile, engine, plan, now, completedWeeks) {
+  const completed = completedWeeks || 0;
   const race = new Date(String(profile.race_date).replace(" ", "T"));
   const thisMonday = plan._mondayOf(now);
   const raceMonday = plan._mondayOf(race);
@@ -96,12 +101,11 @@ function buildWeeks(state, profile, engine, plan, now) {
       quality = isRace ? 0 : 1;
       if (isRace) milestone = "race_week";
     } else {
-      if (i > 0) {
-        cutback = i % 4 === 3 && i !== finalLrIdx; // never cut the final-LR week
-        if (!cutback) {
-          const grow = baseline > 0 && vol < 0.6 * baseline ? 1.15 : 1.08;
-          vol = Math.min(vol * grow, ceiling);
-        }
+      // cutback cadence counts from the PROGRAM start, not from this rebuild
+      cutback = (i + completed) % 4 === 3 && i !== finalLrIdx;
+      if (i > 0 && !cutback) {
+        const grow = baseline > 0 && vol < 0.6 * baseline ? 1.15 : 1.08;
+        vol = Math.min(vol * grow, ceiling);
       }
       let t = cutback ? vol * 0.75 : vol;
       if (ramp) t = Math.min(t, ramp.cap_km); // explicit return-to-run governs
@@ -140,7 +144,11 @@ function buildWeeks(state, profile, engine, plan, now) {
     !state.vdot.available ||
     (state.vdot.source_run && state.vdot.source_run.days_ago > 45);
   if (staleVdot) {
-    for (let i = 3; i < finalLrIdx; i++) { // short blocks (finalLrIdx ≤ 3) skip it
+    // "from week 4" counts PROGRAM weeks: a rebuild of a program that's already
+    // 4+ weeks old may benchmark immediately (the reset used to push it out
+    // forever — stale zones then kept the light yellow indefinitely).
+    const firstEligible = Math.max(0, 3 - completed);
+    for (let i = firstEligible; i < finalLrIdx; i++) { // short blocks skip it
       const w = weeks[i];
       if (!w.is_cutback && w.quality_sessions > 0 && !w.milestone) {
         w.milestone = "benchmark";
@@ -152,6 +160,9 @@ function buildWeeks(state, profile, engine, plan, now) {
   const finalLr = finalLrIdx >= 0 ? weeks[finalLrIdx] : null;
   const benchmark = weeks.find(function (w) { return w.milestone === "benchmark"; }) || null;
   const summary =
+    (completed > 0
+      ? "program re-anchored at week " + (completed + 1) + " of " + (completed + n) + " — "
+      : "") +
     n + "-week block to " + (profile.race_name || "the race") + " (" + raceLabel + "): " +
     "volume " + Math.round(seed) + "→" + Math.round(peakVol) + " km/wk with " +
     cutbacks + " cutback week" + (cutbacks === 1 ? "" : "s") + "; " +
@@ -176,8 +187,13 @@ function loadWeeks(app) {
   }
 }
 
-function persist(app, weeks) {
-  for (const rec of loadWeeks(app)) app.delete(rec);
+// keepBeforeIso (M11): when set, rows for weeks BEFORE that Monday survive —
+// the program's history is part of the program. null = full wipe (new race).
+function persist(app, weeks, keepBeforeIso) {
+  for (const rec of loadWeeks(app)) {
+    if (keepBeforeIso && rec.getString("week_start").slice(0, 10) < keepBeforeIso) continue;
+    app.delete(rec);
+  }
   const col = app.findCollectionByNameOrId("macro_weeks");
   for (const w of weeks) {
     const rec = new Record(col);
@@ -204,9 +220,25 @@ function generate(app, engine, plan) {
   if (!profile || !profile.race_date) {
     return { skipped: true, reason: "no race set — the block anchors to a race date" };
   }
-  const built = buildWeeks(state, profile, engine, plan, now);
+
+  // M11: a rebuild CONTINUES the program, it never restarts it. If the
+  // existing block points at the same race, its completed weeks are history —
+  // count them, keep their rows, and only regenerate from this week forward.
+  // Only a race change starts a genuinely new program (full wipe).
+  const thisMonday = plan._mondayOf(now);
+  const thisMondayIso = isoDay(thisMonday);
+  const raceMonday = plan._mondayOf(new Date(String(profile.race_date).replace(" ", "T")));
+  let completed = 0;
+  const rows = loadWeeks(app);
+  if (rows.length && rows[rows.length - 1].getFloat("week_idx") === plan._weekIdx(raceMonday)) {
+    for (const r of rows) {
+      if (r.getString("week_start").slice(0, 10) < thisMondayIso) completed++;
+    }
+  }
+
+  const built = buildWeeks(state, profile, engine, plan, now, completed);
   if (built.error) return { skipped: true, reason: built.error };
-  persist(app, built.weeks);
+  persist(app, built.weeks, completed > 0 ? thisMondayIso : null);
   console.log("macro: block generated — " + built.summary);
   return {
     skipped: false,
