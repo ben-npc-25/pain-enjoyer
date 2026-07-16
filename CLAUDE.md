@@ -235,8 +235,22 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   green. NOTE: recovery_daily has no fresh rows — Ben's phone still has the
   OLD login after the 2026-07-13 credential change; recovery/weight facts
   stay dark until he re-enters credentials in the iOS app settings.
+- **M11.1 deployed & verified live (2026-07-16)**: Ben ran an interval and
+  was STILL yellow/all-easy. Root cause: VDOT anchor = best effort in 365 d —
+  his pre-injury marathon (47.7, 109 d old); nothing current-him could
+  out-run March-him, so zones_stale never cleared and paces came from a
+  fitter past self (even the benchmark couldn't beat it). Now: **zones
+  anchor to the best RECENT (45 d) effort** (easy-run anchor self-corrects
+  upward); the year best surfaces as `vdot.reference` (the comeback target
+  the coach narrates); the block's benchmark triggers on a >3-VDOT gap to
+  the reference, not staleness. Live after deploy: 🟢 GREEN, anchor = his
+  Jul 15 interval (VDOT 43.2, threshold 4:47 — was 47.7/4:25-ish),
+  reference 47.7 kept as target. Recovery sync is back (score 96 — phone
+  creds fixed). NOTE: week of 2026-07-20 is the program's cadence CUTBACK
+  (easier by design); quality + benchmark land week of 2026-07-27.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
-  +M10 health layer, +web planner, +M11 continuity/check-in).
+  +M10 health layer, +web planner, +M11 continuity/check-in, +M11.1
+  current-form zones).
   Parked still: taper specialization beyond the deterministic taper, Android,
   multi-user, auto-fetch race info from the web. UI polish is iterative from
   here.
