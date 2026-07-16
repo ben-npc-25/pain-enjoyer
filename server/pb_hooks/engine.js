@@ -325,24 +325,43 @@ function returnRampPlan(profile, ref, baselineKm) {
 // VDOT = best (max) single-run VDOT in the window. Easy runs score low, so
 // max() naturally finds real efforts without needing intent labels.
 function computeVdot(runs, now) {
-  // Reference fitness = the athlete's BEST effort over a long window (a year),
-  // so a short layoff doesn't erase demonstrated fitness. Staleness is surfaced
-  // separately (the traffic light flags an anchor >45 days old as optimistic),
-  // and the coach trains by effort on easy days accordingly.
-  const WINDOW = 365, MIN_M = 3000, MIN_S = 720;
-  let best = null;
+  // M11.1: zones reflect CURRENT fitness — the anchor is the best effort in
+  // the RECENT window (45 d, the same threshold the light calls "stale").
+  // The year-long best is kept as a REFERENCE, never the anchor: after a
+  // break it belongs to a fitter past self, and anchoring to it prescribed
+  // paces the athlete couldn't run, made every current run read "slow", and
+  // pinned zones_stale yellow forever (nothing current could out-run it —
+  // not even the benchmark that was supposed to cure it). A recent easy-run
+  // anchor is deliberately fine: conservative paces self-correct upward the
+  // moment a faster effort lands.
+  const WINDOW = 365, RECENT = 45, MIN_M = 3000, MIN_S = 720;
+  let bestRecent = null, bestYear = null;
   for (const r of runs) {
-    if (daysAgo(r.date, now) > WINDOW) continue;
+    const d = daysAgo(r.date, now);
+    if (d > WINDOW) continue;
     if (r.distM < MIN_M || r.durS < MIN_S) continue;
     const v = vdotForEffort(r.distM, r.durS);
-    if (!best || v > best.vdot) best = { vdot: v, run: r };
+    if (!bestYear || v > bestYear.vdot) bestYear = { vdot: v, run: r };
+    if (d <= RECENT && (!bestRecent || v > bestRecent.vdot)) bestRecent = { vdot: v, run: r };
   }
+  const best = bestRecent || bestYear;
   if (!best) {
     return {
       available: false,
       reason: "no run ≥3 km in the last " + WINDOW + " days",
     };
   }
+  // Reference = demonstrated fitness meaningfully above the current anchor
+  // (the comeback gap the coach can speak to; also what the block's
+  // benchmark milestone keys on).
+  const reference =
+    bestYear && bestYear.run !== best.run && bestYear.vdot > best.vdot + 1
+      ? {
+          vdot: round(bestYear.vdot, 1),
+          date: isoDay(bestYear.run.date),
+          days_ago: daysAgo(bestYear.run.date, now),
+        }
+      : null;
   const vdot = round(best.vdot, 1);
   // Raw sec/km per zone — the plan generator fills workout pace targets from
   // these (LLM never computes paces). Strings below are for display/LLM.
@@ -378,9 +397,10 @@ function computeVdot(runs, now) {
       pace: paceStr,
       days_ago: daysAgo(r.date, now),
     },
+    reference: reference, // fitter past self (null when current form IS the best)
     summary:
       vdot +
-      " (best effort: " +
+      " (best recent effort: " +
       fmtKm(r.distM / 1000) +
       " @ " +
       paceStr +
@@ -388,7 +408,11 @@ function computeVdot(runs, now) {
       isoDay(r.date) +
       ", " +
       daysAgo(r.date, now) +
-      " days ago)",
+      " days ago)" +
+      (reference
+        ? "; demonstrated peak VDOT " + reference.vdot + " on " + reference.date +
+          " (" + reference.days_ago + " days ago) — zones use current form, the peak is the comeback target"
+        : ""),
   };
 }
 

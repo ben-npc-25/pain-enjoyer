@@ -135,14 +135,16 @@ function buildWeeks(state, profile, engine, plan, now, completedWeeks) {
     });
   }
 
-  // M9.2: when the pace zones are anchored to a stale (>45 d) or missing
-  // effort, the block schedules a BENCHMARK — one controlled 3 km steady
-  // effort around week 4 — to re-anchor VDOT and un-pause the race
+  // M9.2→M11.1: the block schedules a BENCHMARK — one controlled 3 km steady
+  // effort — when the zones anchor is stale/missing OR the athlete's current
+  // anchor sits well below their demonstrated peak (the comeback gap): a
+  // controlled test shows where fitness really is and re-anchors the race
   // projection. Deterministic placement: first ordinary week (no cutback,
-  // has a quality slot, no other milestone) from week 4 onward.
+  // has a quality slot, no other milestone) from program week 4 onward.
   const staleVdot =
     !state.vdot.available ||
-    (state.vdot.source_run && state.vdot.source_run.days_ago > 45);
+    (state.vdot.source_run && state.vdot.source_run.days_ago > 45) ||
+    (state.vdot.reference && state.vdot.reference.vdot - state.vdot.value > 3);
   if (staleVdot) {
     // "from week 4" counts PROGRAM weeks: a rebuild of a program that's already
     // 4+ weeks old may benchmark immediately (the reset used to push it out

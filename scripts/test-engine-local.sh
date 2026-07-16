@@ -816,13 +816,31 @@ print("  ✓ HRmax 194 bpm from observed peak (192+2), not the avg+8 guess")'
 curl -fsS -X PATCH "$BASE/api/collections/athlete_profile/records/$PROF_ID" \
   -H "Authorization: $TOKEN" -H 'content-type: application/json' -d '{"hr_max":185}' >/dev/null
 
-echo "· M9.2: benchmark week (stale VDOT → the block schedules a re-anchor effort)…"
-# delete the fresh d4 anchor → best effort falls back to a 60-day-old run
-# (>45 d stale) → regenerating the block must schedule a benchmark milestone.
+echo "· M9.2→M11.1: comeback gap → recent anchor + benchmark to close the gap…"
+# delete the fresh d4 quality anchor, then plant a fast 60-day-old run (a
+# fitter past self, VDOT ~50). M11.1 semantics: zones must anchor to the best
+# RECENT run (fresh, no zones_stale), the old peak becomes `reference`, and
+# the >3-VDOT comeback gap makes the block schedule a benchmark milestone.
 D4_ID=$(curl -fsS -G "$BASE/api/collections/runs/records" \
   --data-urlencode "filter=healthkit_uuid = 'm8-back-4'" --data-urlencode "perPage=1" \
   -H "Authorization: $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
 curl -fsS -X DELETE "$BASE/api/collections/runs/records/$D4_ID" -H "Authorization: $TOKEN"
+curl -fsS -X POST "$BASE/api/collections/runs/records" \
+  -H "Authorization: $TOKEN" -H 'content-type: application/json' \
+  -d "{\"date\":\"$(day 60)T07:30:00.000Z\",\"distance_m\":10000,\"duration_s\":2400,
+    \"avg_hr\":176,\"source_app\":\"engine-smoke\",\"healthkit_uuid\":\"m11-peak\"}" >/dev/null
+curl -fsS "$BASE/api/coach/engine" -H "Authorization: $TOKEN" > "$WORK/engine-m111.json"
+python3 - "$WORK/engine-m111.json" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+v = s["vdot"]
+assert v["source_run"]["days_ago"] <= 45, ("anchor must be RECENT", v["source_run"])
+assert v.get("reference"), "fitter past self must surface as reference"
+assert v["reference"]["vdot"] - v["value"] > 3, (v["reference"], v["value"])
+assert "zones_stale" not in s["traffic_light"]["drivers"], s["traffic_light"]["drivers"]
+print("  ✓ zones anchor to current form (VDOT %s, %sd old); peak %s is reference, no zones_stale"
+      % (v["value"], v["source_run"]["days_ago"], v["reference"]["vdot"]))
+PYEOF
 curl -fsS -X POST "$BASE/api/coach/macro-plan" -H "Authorization: $TOKEN" > "$WORK/macro-bm.json"
 python3 - "$WORK/macro-bm.json" <<'PYEOF'
 import json, sys
@@ -831,10 +849,9 @@ weeks = r["weeks"]
 bm = [i for i, w in enumerate(weeks) if w["milestone"] == "benchmark"]
 assert len(bm) == 1, ("exactly one benchmark week", bm)
 i = bm[0]
-assert i >= 3, ("benchmark lands after the opening rebuild weeks", i)
 assert not weeks[i]["is_cutback"] and weeks[i]["quality_sessions"] >= 1, weeks[i]
 assert "benchmark effort week of" in r["summary"], r["summary"]
-print("  ✓ stale VDOT → benchmark scheduled in block week %d: %s" % (i + 1, weeks[i]["week_start"]))
+print("  ✓ comeback gap >3 VDOT → benchmark scheduled in block week %d: %s" % (i + 1, weeks[i]["week_start"]))
 PYEOF
 
 # ── 17. M10: health coach (weight → snapshot + personalized fueling) ─────
