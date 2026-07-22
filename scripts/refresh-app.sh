@@ -32,9 +32,15 @@ PROFILE_DIRS=("$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
               "$HOME/Library/MobileDevice/Provisioning Profiles")
 LOG="$HOME/Library/Logs/pain-enjoyer-refresh.log"
 STAMP="$HOME/Library/Logs/.pain-enjoyer-last-resign" # epoch of last success
-RESIGN_BUFFER_DAYS=2   # re-sign once the installed profile has < this many days left
+RESIGN_BUFFER_DAYS=3   # re-sign once the profile has < this many days left. 3, not 2:
+                       # the app died 2026-07-20 because the Mac slept (lid closed, on
+                       # battery) through the entire 2-day due window — a wider window
+                       # buys more awake heartbeats.
 ESCALATE_DAYS_LEFT=1   # below this, an unreachable phone is a real alarm
 MIN_FRESH_DAYS=3       # a newly minted profile must have at least this much runway
+INSTALL_RETRIES=10     # locked phone: retry install every 30 s for ~5 min — "run the
+                       # script, then pick up the phone and unlock it" must just work
+                       # (the phone re-locks during the ~40 s build otherwise)
 
 log()    { echo "[$(date '+%F %T')] $1" >> "$LOG"; }
 notify() { /usr/bin/osascript -e "display notification \"$2\" with title \"$1\"" 2>/dev/null || true; }
@@ -105,8 +111,21 @@ if [[ $new_days_left -lt $MIN_FRESH_DAYS ]]; then
   fail "fresh build's profile still expires in ${new_days_left}d — Xcode did not mint a new profile (interactive Apple ID re-login likely needed)"
 fi
 
-xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >> "$LOG" 2>&1 \
-  || fail "install failed — unlock the iPhone (and keep it unlocked) once, then retry"
+# Install, tolerating a locked phone: the developer-image mount needs one
+# unlock, and the phone usually re-locked itself during the build. Retry for
+# ~5 min and notify so the human knows an unlock is all that's missing.
+installed=false
+for attempt in $(seq 1 "$INSTALL_RETRIES"); do
+  if xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >> "$LOG" 2>&1; then
+    installed=true; break
+  fi
+  if [[ $attempt -eq 1 ]]; then
+    notify "Pain Enjoyer re-sign" "Fresh build ready — unlock the iPhone in the next ~5 min and it installs itself."
+    log "install blocked (likely locked phone) — retrying every 30 s for ~5 min"
+  fi
+  sleep 30
+done
+$installed || fail "install failed after $INSTALL_RETRIES tries — unlock the iPhone (and keep it unlocked), then re-run with --force"
 
 echo "$now" > "$STAMP"
 expiry_date=$(date -j -u -r "$new_expiry" "+%F %H:%M UTC" 2>/dev/null || echo "+${new_days_left}d")
