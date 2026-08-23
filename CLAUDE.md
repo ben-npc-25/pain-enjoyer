@@ -4,7 +4,7 @@ Single-user AI marathon coach for Ben. Read `PLAN.md` first (design, data model,
 milestones M0–M4) and `README.md` (runbook + hard-won gotchas). Be straight with
 Ben; he's technical and cost-conscious (target ≈ $0).
 
-## Status (2026-06-11)
+## Status (2026-08-23)
 
 - **M0 done & verified**: backend live, advice flows end-to-end through the public URL.
 - **M1 built & deployed (2026-06-11)**: compiled clean (zero fixes needed),
@@ -248,6 +248,49 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   reference 47.7 kept as target. Recovery sync is back (score 96 — phone
   creds fixed). NOTE: week of 2026-07-20 is the program's cadence CUTBACK
   (easier by design); quality + benchmark land week of 2026-07-27.
+- **M12 built + tested (2026-08-23) — the native app is retired; deploy =
+  Ben's one-liner + a phone-side app install**: `refresh-app.sh` could never
+  work on Ben's work Mac. Diagnosis (evidence, not a guess): 108 consecutive
+  `error: No Accounts` failures; the Mac is Jamf-managed
+  (`exwzd.jamfcloud.com`, DEP, Defender + Netskope DLP) with a policy named
+  **"Find AppleID signedin users"** running every ~15 min that removes the
+  Xcode Apple ID within ≤4 days of every login. Proof it's a real removal and
+  not a launchd-context quirk: on 2026-08-10 the *manual* run at 12:55 also
+  failed, and 12:57 succeeded only after an interactive Xcode re-login. I
+  declined to build the credential snapshot/restore bypass — that's defeating
+  a named security control on a company-owned, DLP-logged machine, and it
+  would be permanent cat-and-mouse anyway. Fix instead: **take the phone out
+  of the build loop**. ① `health_ingest.js` + `POST /api/health/ingest` — an
+  App Store HealthKit exporter (Health Auto Export) POSTs HealthKit JSON;
+  the hook maps it onto the SAME `runs` + `recovery_daily` rows the phone
+  wrote, preserving `healthkit_uuid` dedupe (old app's rows are recognised,
+  never duplicated), the instant-vs-local-day distinction, and **wake-day
+  sleep attribution** (matches `HealthKitService.swift`). Tolerant mapper:
+  field aliases + unit conversion (km/mi→m, lb→kg, s→ms, minutes→hours),
+  duration from `end−start` (exporters disagree on the `duration` unit),
+  unmapped metrics REPORTED not dropped. Auth = shared secret
+  `HEALTH_INGEST_TOKEN` (header, Bearer, or `?token=`, since the exporter
+  can't run a PB login); unset ⇒ 503, never open; <16 chars refused.
+  ② **web app is now installable** — `manifest.webmanifest` + apple meta tags
+  + icons from the app icon; Safari → Add to Home Screen, never expires.
+  Suite: `scripts/test-health-ingest-local.sh` (23 checks, port 8096).
+  **Gives up (native-only, stated honestly): GPS route maps (HKWorkoutRoute)
+  and per-km splits** (M7 Phase 4 durability degrades gracefully; old rows
+  keep theirs). Everything else was already at web parity.
+  **To finish**: ① `openssl rand -hex 24` → `HEALTH_INGEST_TOKEN` into
+  `/opt/pain-enjoyer/.env` (canonical!) + `~/pain-enjoyer/server/.env`,
+  ② `./scripts/deploy-server.sh ben@192.168.1.236`, ③ install Health Auto
+  Export, point a REST-API automation at
+  `https://coach.bennpc.uk/api/health/ingest?token=<token>` exporting
+  Workouts + HRV/RHR/Sleep/VO₂max/Weight (wide date range once to backfill),
+  ④ Add to Home Screen. Full runbook in README §M12.
+- **⚠ Pre-existing failure found 2026-08-23 (NOT caused by M12)**: the M11 ②
+  "benchmark forced into an all-easy LLM plan" checks fail on pristine HEAD
+  too (verified in a clean worktree) — the macro still SCHEDULES the benchmark
+  week and the rationale still mentions it, but no 3 km T session lands in the
+  plan. That's the mechanism that un-sticks Ben's stale zones, so it matters.
+  Not yet diagnosed; likely M11.1 changed the benchmark trigger (VDOT-gap
+  instead of staleness) without the weekly rail following.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
   +M10 health layer, +web planner, +M11 continuity/check-in, +M11.1
   current-form zones).
@@ -285,7 +328,8 @@ Ben; he's technical and cost-conscious (target ≈ $0).
    fixed by PATCHing the user via superuser, then syncing both .env copies).
 4. Numbers going to the LLM must be pre-formatted strings ("5:47 min/km") —
    it once turned decimal 5.79 into "5:79/km".
-5. Free Apple account: app install expires every 7 days; background sync dies
+5. **(Largely moot since M12 — the native app is retired; kept because the
+   iOS project still exists.)** Free Apple account: app install expires every 7 days; background sync dies
    silently with it. No remote push — coach messages are fetch-on-open.
    **The 7 days run from the profile's MINT date, not the install date** —
    Xcode reuses a still-valid cached profile on rebuild, so re-signing alone

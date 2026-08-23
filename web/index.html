@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pain Enjoyer</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+<!-- M12: installable to the home screen. This replaced the native app after
+     the work Mac's Jamf policy made the 7-day re-sign unautomatable — the SPA
+     never expires, and HealthKit now arrives via POST /api/health/ingest.
+     status-bar-style stays "default" on purpose: "black-translucent" would put
+     content under the status bar and needs safe-area CSS we don't have. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Pain Enjoyer">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>

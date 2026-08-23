@@ -18,7 +18,8 @@ iPhone (SwiftUI + HealthKit) ──HTTPS (Cloudflare Tunnel)──► Raspberry 
 |---|---|
 | `server/` | Everything that runs on the Pi: setup script, PocketBase migrations + hooks (incl. `engine.js`, the M2 deterministic engine) |
 | `scripts/` | `test-e2e.sh` (simulated phone), `test-engine-local.sh` (M2 engine math on a throwaway PB), `test-engine-live.sh` (M2 exit test, read-only), `deploy-server.sh`, `diag.sh`, `cleanup-test-data.sh`, tunnel setup |
-| `ios/` | SwiftUI app (XcodeGen project — needs a Mac to build) |
+| `web/` | Static SPA served from `pb_public` — same origin, same API as the phone; installable to the home screen (M12) |
+| `ios/` | SwiftUI app (XcodeGen project — needs a Mac to build; superseded by M12) |
 
 ## Quickstart (M0)
 
@@ -63,6 +64,11 @@ grant HealthKit access. The app then:
 
 > Free Apple account: the install expires every **7 days** — re-run from Xcode weekly.
 > (Documented as risk #1 in PLAN.md; $99/yr removes it.)
+>
+> ⚠ **Superseded on 2026-08-23 — see [M12](#m12--no-mac-healthkit-without-the-native-app).**
+> The weekly re-sign turned out to be unautomatable on Ben's work Mac, so the
+> phone now runs the web app + an App Store HealthKit exporter instead. This
+> section is kept for anyone building the native app on a Mac they control.
 
 ## M2 — the deterministic engine
 
@@ -176,6 +182,104 @@ BASE_URL=https://coach.bennpc.uk ./scripts/test-engine-live.sh   # M2 exit test 
   (`POST /api/coach/trends-review`, stored as kind `weekly_review`).
 - Quick check-in buttons removed (felt cheap); chat + "Ask coach" entry points
   remain.
+
+## M12 — no Mac: HealthKit without the native app
+
+**Why.** The custom app needs a free-account provisioning profile re-minted
+every 7 days from a Mac with a live Xcode Apple ID. Ben's work Mac is
+Jamf-managed (`exwzd.jamfcloud.com`) with a policy literally named **"Find
+AppleID signedin users"** running on every ~15-minute check-in; it removes the
+Xcode account within days. `refresh-app.sh` failed **108 times in a row** on
+`error: No Accounts`, and the proof it's a real removal rather than a launchd
+quirk is in the log: a *manual* run also failed, and only succeeded two
+minutes later after an interactive Xcode re-login.
+
+Rather than fight a security control on a company machine, the phone stops
+being a build target:
+
+| Was | Now |
+|---|---|
+| Native SwiftUI app, re-signed weekly | **Web app on the home screen** (`pb_public`, never expires) |
+| `HealthKitService.swift` → server | **App Store HealthKit exporter** → `POST /api/health/ingest` |
+| Mac + Xcode + Apple ID in the loop | Nothing but the phone and the Pi |
+
+`health_ingest.js` maps the exporter's JSON onto the **same** `runs` +
+`recovery_daily` rows the phone wrote, preserving every semantic the engine
+depends on: `healthkit_uuid` stays the dedupe key (so rows the old app
+uploaded are recognised, never duplicated), `runs.date` is a true instant
+while `recovery_daily.date` is a local day label, and sleep is filed under the
+**wake day** exactly as `HealthKitService.swift` did it.
+
+### Server setup (once)
+
+```bash
+openssl rand -hex 24                      # generate the ingest token
+# add to the CANONICAL env file (the service reads only this one):
+sudo sh -c 'echo HEALTH_INGEST_TOKEN=<token> >> /opt/pain-enjoyer/.env'
+# keep the convenience copy in sync so the test scripts see it too:
+echo HEALTH_INGEST_TOKEN=<token> >> ~/pain-enjoyer/server/.env
+./scripts/deploy-server.sh ben@192.168.1.236   # ships the hook + web files
+```
+
+With no `HEALTH_INGEST_TOKEN` set the route returns **503** — it never stands
+open. A token shorter than 16 chars is refused for the same reason.
+
+### Phone setup (once)
+
+1. App Store → **Health Auto Export** (or any exporter that can POST JSON to a
+   REST endpoint). Grant it HealthKit **read** access.
+2. New Automation → type **REST API**:
+   - URL `https://coach.bennpc.uk/api/health/ingest?token=<token>`
+     (the query param is the compatible-everywhere option; `X-Ingest-Token:`
+     and `Authorization: Bearer` headers work too if your build supports them)
+   - Method **POST**, `Content-Type: application/json`
+   - Export **Workouts** *and* **Health Metrics**
+   - Metrics: Heart Rate Variability, Resting Heart Rate, Sleep Analysis,
+     VO₂ Max, Weight & Body Mass
+   - Schedule: hourly or daily — posting is **idempotent**, so overlap is free
+3. First export: widen the date range (180 days) once to backfill, then drop
+   back to a rolling window.
+4. Safari → `https://coach.bennpc.uk` → Share → **Add to Home Screen**. It
+   launches standalone (no browser chrome) and never expires.
+
+Runs still reach the server the same way they always did — Runkeeper writes
+them to Apple Health, and the exporter forwards them. That path is untouched.
+
+### Reading the response
+
+Every post returns a report instead of a bare 200, so a partial import is
+loud rather than silent:
+
+```json
+{"runs_created":2,"runs_duplicate":1,"runs_unusable":1,
+ "recovery_created":1,"recovery_updated":0,"days_seen":1,
+ "ignored_metrics":["step_count"]}
+```
+
+- `runs_duplicate` — already on the server by `healthkit_uuid`. Expected on
+  every repeat post; not a problem.
+- `runs_unusable` — no distance or no duration. `distance_m`/`duration_s` are
+  `required` in the schema and PocketBase rejects 0, which is also why
+  strength/yoga sessions never landed from the native app either.
+- `ignored_metrics` — sent by the exporter, not mapped here (steps, energy…).
+  If a metric you *want* shows up in this list, its name changed upstream and
+  the alias table in `health_ingest.js` needs it.
+
+Smoke test: `./scripts/test-health-ingest-local.sh` (23 checks — auth, unit
+conversion, dedupe, wake-day sleep, partial upsert, engine integration, PWA).
+
+### What this gives up
+
+Honest list — both were native-only:
+
+- **GPS route maps** on run detail (`HKWorkoutRoute`, M6). Exporters don't
+  send route data and the web app can't read HealthKit.
+- **Per-km splits** (M7 Phase 4 durability score). The exporter has no split
+  payload, so `runs.splits` stays null on new rows; the score degrades
+  gracefully and old rows keep theirs.
+
+Everything else — program, calendar, trends, chat, notes, effort, weight,
+recovery — is already at parity in the web app.
 
 ## Provider flip (dev → real season)
 

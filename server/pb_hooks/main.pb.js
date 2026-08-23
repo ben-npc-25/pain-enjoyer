@@ -641,3 +641,39 @@ routerAdd(
 routerAdd("GET", "/api/coach/health", (e) => {
   return e.json(200, { ok: true, provider: $os.getenv("LLM_PROVIDER") || "gemini" });
 });
+
+// ── POST /api/health/ingest ────────────────────────────────────────────
+// M12: HealthKit → server without the native app. See health_ingest.js for
+// why (Jamf strips the Xcode Apple ID, so the 7-day re-sign can't be
+// automated on the work Mac) — an App Store HealthKit exporter POSTs here on
+// a schedule instead, writing the same runs + recovery_daily rows the phone
+// used to write.
+//
+// Deliberately NOT $apis.requireAuth(): the poster is an off-the-shelf iOS
+// app that can only attach a static URL/header, not run a PocketBase login.
+// It authenticates with a shared secret (HEALTH_INGEST_TOKEN in .env) over
+// HTTPS; with no token configured the route refuses to run at all rather
+// than standing open.
+
+routerAdd("POST", "/api/health/ingest", (e) => {
+  try {
+    const ingest = require(`${__hooks}/health_ingest.js`);
+
+    const want = $os.getenv("HEALTH_INGEST_TOKEN");
+    if (!want) {
+      return e.json(503, { error: "HEALTH_INGEST_TOKEN is not set on the server" });
+    }
+    const info = e.requestInfo();
+    if (!ingest.tokenMatches(want, ingest.tokenFrom(info))) {
+      console.log("health ingest: rejected a post with a bad/missing token");
+      return e.json(401, { error: "bad or missing ingest token" });
+    }
+
+    const report = ingest.ingest(e.app, info.body);
+    console.log("health ingest:", JSON.stringify(report));
+    return e.json(200, report);
+  } catch (err) {
+    console.log("health ingest failed:", String(err), err && err.stack ? String(err.stack) : "");
+    return e.json(502, { error: String(err) });
+  }
+});
