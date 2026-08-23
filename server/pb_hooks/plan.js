@@ -595,6 +595,15 @@ function generateWeek(app, llm, persona, engine, startDate, convo) {
           slot.type = "T";
           slot.distance_km = 5;
           slot.description = benchDesc;
+        } else {
+          // Never fail silently here: a dropped benchmark is what kept the
+          // zones stale (and the light yellow) for months. Say so, so it shows
+          // up in the week's rationale and the next rebuild can re-place it.
+          plan.adjustments.push(
+            "benchmark week, but no day left in it could hold the 3 km effort " +
+              "(only " + plan.days.length + " day(s) and " + capKm +
+              " km of cap remain) — it will be re-placed on the next rebuild"
+          );
         }
       }
     }

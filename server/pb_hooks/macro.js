@@ -146,10 +146,19 @@ function buildWeeks(state, profile, engine, plan, now, completedWeeks) {
     (state.vdot.source_run && state.vdot.source_run.days_ago > 45) ||
     (state.vdot.reference && state.vdot.reference.vdot - state.vdot.value > 3);
   if (staleVdot) {
+    // A benchmark also needs RUNWAY. weeks[0] is the CURRENT week, and a
+    // rebuild late in it leaves too few days for the weekly rail to place the
+    // session: no easy day left to convert, no rest day left to claim. The
+    // milestone then sat on a dead week until the next rebuild — precisely the
+    // stale-zone limbo M11 set out to end (it's why the M11 suite's forced-
+    // benchmark checks failed whenever they ran on a Sat/Sun). Need ≥3 days
+    // left, i.e. Mon–Fri; otherwise start at the next week.
+    const daysLeftWk0 = 7 - Math.floor((now.getTime() - thisMonday.getTime()) / 86400000);
+    const earliest = daysLeftWk0 >= 3 ? 0 : 1;
     // "from week 4" counts PROGRAM weeks: a rebuild of a program that's already
     // 4+ weeks old may benchmark immediately (the reset used to push it out
     // forever — stale zones then kept the light yellow indefinitely).
-    const firstEligible = Math.max(0, 3 - completed);
+    const firstEligible = Math.max(earliest, 3 - completed);
     for (let i = firstEligible; i < finalLrIdx; i++) { // short blocks skip it
       const w = weeks[i];
       if (!w.is_cutback && w.quality_sessions > 0 && !w.milestone) {

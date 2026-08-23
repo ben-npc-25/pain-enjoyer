@@ -46,19 +46,26 @@ SU_EMAIL="smoke@test.local"; SU_PASS="smoketest12345"
 # Mock weekly plan: deliberately ALL-EASY (no T anywhere) so the forced
 # benchmark has something to force. Dates = the CURRENT week (plan-week is
 # called with ?start=<this monday>).
-CUR_WEEK=($(python3 -c "
-import datetime
+# Mock weekly plan: deliberately ALL-EASY (no T anywhere) so the forced
+# benchmark has something to force. Covers TWO weeks: the benchmark can land on
+# the current week or the next one depending on how much runway the current week
+# still has (macro.js skips week 0 after Friday), and sanitizePlan matches LLM
+# days BY DATE — an unfed week would come back all-rest and test nothing.
+MOCK_WEEKLY=$(python3 -c "
+import datetime, json
 now = datetime.date.today()
 mon = now - datetime.timedelta(days=now.weekday())
-print(' '.join(str(mon + datetime.timedelta(days=i)) for i in range(7)))"))
-MOCK_WEEKLY='{"rationale":"Easy week while the light is yellow.","days":[
- {"date":"'"${CUR_WEEK[0]}"'","type":"E","distance_km":5,"description":"easy"},
- {"date":"'"${CUR_WEEK[1]}"'","type":"rest","distance_km":0,"description":"off"},
- {"date":"'"${CUR_WEEK[2]}"'","type":"E","distance_km":6,"description":"easy"},
- {"date":"'"${CUR_WEEK[3]}"'","type":"rest","distance_km":0,"description":"off"},
- {"date":"'"${CUR_WEEK[4]}"'","type":"E","distance_km":5,"description":"easy"},
- {"date":"'"${CUR_WEEK[5]}"'","type":"rest","distance_km":0,"description":"off"},
- {"date":"'"${CUR_WEEK[6]}"'","type":"LR","distance_km":12,"description":"long"}]}'
+days = []
+for i in range(14):
+    d = mon + datetime.timedelta(days=i)
+    if d.weekday() == 6:
+        days.append({'date': str(d), 'type': 'LR', 'distance_km': 12, 'description': 'long'})
+    elif d.weekday() in (1, 3, 5):
+        days.append({'date': str(d), 'type': 'rest', 'distance_km': 0, 'description': 'off'})
+    else:
+        days.append({'date': str(d), 'type': 'E', 'distance_km': 5, 'description': 'easy'})
+print(json.dumps({'rationale': 'Easy week while the light is yellow.', 'days': days}))
+")
 
 LLM_PROVIDER=mock \
 WEATHER_MODE=off \
@@ -146,20 +153,42 @@ mon = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().wee
 future = [r for r in rows if r["week_start"][:10] >= mon]
 assert future and future[0]["week_start"][:10] == mon, (mon, future[:1])
 EOF
-check "stale VDOT ⇒ benchmark scheduled in the FIRST future week (program week 5)" python3 - <<EOF
+check "stale VDOT ⇒ benchmark in the earliest week with runway (mature program)" python3 - <<EOF
 import json, datetime
 rows = json.load(open("$WORK/rows.json"))["items"]
-mon = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
-future = [r for r in rows if r["week_start"][:10] >= mon]
+today = datetime.date.today()
+mon = today - datetime.timedelta(days=today.weekday())
+future = [r for r in rows if r["week_start"][:10] >= mon.isoformat()]
 marks = [r["week_start"][:10] for r in future if r["milestone"] == "benchmark"]
-assert marks and marks[0] == mon, marks
+# A mature program (4 weeks done) benchmarks as early as possible, but the week
+# must still hold ≥3 days: this week Mon–Fri, next week on Sat/Sun. Placing it
+# on a spent week left the milestone stranded and the zones stale.
+days_left_this_week = 7 - today.weekday()
+expected = mon if days_left_this_week >= 3 else mon + datetime.timedelta(days=7)
+assert marks and marks[0] == expected.isoformat(), (marks, expected.isoformat(), days_left_this_week)
 EOF
 check "engine narrates 'block week 5 of'" bash -c \
   "curl -fsS '$BASE/api/coach/engine' -H 'Authorization: $TOKEN' | grep -q 'block week 5 of'"
 
 # ── ② forced benchmark ───────────────────────────────────────────────────
 echo "· ② benchmark forced into an all-easy LLM plan…"
-MON=${CUR_WEEK[0]}
+# Read the benchmark week from the block instead of assuming it's this week —
+# a benchmark needs ≥3 days of runway, so a rebuild on Sat/Sun places it next
+# week. Assuming "this week" is why these checks failed every weekend.
+curl -fsS "$BASE/api/collections/macro_weeks/records?perPage=200&sort=week_start" "${AUTH[@]}" > "$WORK/macro-rows.json"
+MON=$(py "
+import json
+ws=[w['week_start'][:10] for w in json.load(open('$WORK/macro-rows.json'))['items']
+    if w.get('milestone')=='benchmark']
+print(ws[0] if ws else '')")
+check "block scheduled a benchmark week ($MON)" [ -n "$MON" ]
+check "benchmark week has ≥3 days of runway (not a spent week)" python3 - <<EOF
+import datetime
+mon = datetime.date.fromisoformat("$MON")
+today = datetime.date.today()
+left = (mon + datetime.timedelta(days=7) - today).days
+assert left >= 3, ("benchmark week is already spent", "$MON", str(today), left)
+EOF
 curl -fsS -X POST "$BASE/api/coach/plan-week?start=$MON" "${AUTH[@]}" > "$WORK/week.json"
 curl -fsS "$BASE/api/collections/planned_workouts/records?perPage=50&filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"date >= '$MON 00:00:00.000Z'\"))")" "${AUTH[@]}" > "$WORK/planned.json"
 check "a T session exists despite the all-easy mock" python3 - <<EOF

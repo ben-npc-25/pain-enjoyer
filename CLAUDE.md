@@ -302,13 +302,26 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   `https://coach.bennpc.uk/api/health/ingest?token=<token>` exporting
   Workouts + HRV/RHR/Sleep/VO₂max/Weight (wide date range once to backfill),
   ④ Add to Home Screen. Full runbook in README §M12.
-- **⚠ Pre-existing failure found 2026-08-23 (NOT caused by M12)**: the M11 ②
-  "benchmark forced into an all-easy LLM plan" checks fail on pristine HEAD
-  too (verified in a clean worktree) — the macro still SCHEDULES the benchmark
-  week and the rationale still mentions it, but no 3 km T session lands in the
-  plan. That's the mechanism that un-sticks Ben's stale zones, so it matters.
-  Not yet diagnosed; likely M11.1 changed the benchmark trigger (VDOT-gap
-  instead of staleness) without the weekly rail following.
+- **M12.1 benchmark-runway fix (2026-08-23)**: the M11 forced-benchmark checks
+  had been failing on pristine HEAD — and it was a REAL bug, not a flaky test.
+  Root cause: `macro.buildWeeks` placed the benchmark on `weeks[0]` = the
+  CURRENT week (`firstEligible = max(0, 3 - completed)`, and a mature program
+  gives `completed ≥ 3` ⇒ index 0). Rebuild late in the week ⇒ the weekly rail
+  gets a *partial* week (on a Sunday: ONE day, cap 3 km), so there's no easy
+  day to convert and no rest day to claim → the benchmark silently vanished and
+  the milestone sat on a dead week until the next rebuild. That is exactly the
+  stale-zones/yellow limbo M11 was built to end. Fixes: ① `macro.js` — a
+  benchmark needs **≥3 days of runway**, so week 0 is skipped after Friday
+  (`daysLeftWk0 = 7 - floor((now - thisMonday)/86400000)`); ② `plan.js` — when
+  the rail truly can't place it, it now pushes an adjustment saying so instead
+  of failing silently, so it lands in the week's rationale; ③ the M11 suite was
+  **date-dependent** (it assumed the benchmark was always the current week and
+  its all-easy mock only covered 7 days) — the mock now covers 14 days and
+  section ② reads the benchmark week out of `macro_weeks` rather than assuming.
+  Suites: M11 14/14, engine all, web 22/22, M12 32/32.
+  NOTE: verified today (a Sunday) on the skip-to-next-week branch; the Mon–Fri
+  branch (benchmark stays on week 0) is covered by the suite's conditional
+  expectation but wasn't the path executed today.
 - **All PLAN.md milestones shipped** (+M8 adaptive light, +M9 macro block,
   +M10 health layer, +web planner, +M11 continuity/check-in, +M11.1
   current-form zones).
