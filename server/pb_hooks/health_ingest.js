@@ -65,6 +65,30 @@ const METRIC_FIELD = {
   body_mass: "body_mass_kg",
   weight: "body_mass_kg",
   body_weight: "body_mass_kg",
+  // self-mappings: the flat Shortcuts shape names the target fields directly
+  hrv_sdnn_ms: "hrv_sdnn_ms",
+  body_mass_kg: "body_mass_kg",
+};
+
+// The flat shape an Apple Shortcut can build with ONE Dictionary action:
+//   {"date":"2026-08-22","hrv":45.2,"rhr":48,"sleep":7.1,"vo2max":51.4,"weight":70}
+// Health Auto Export costs a subscription after its trial, so this is the
+// free path — Shortcuts is on every iPhone. Weight is kg and sleep is hours
+// here (no units field); the exporter path is the one that converts lb/ms.
+const FLAT_METRIC_KEYS = {
+  hrv: "hrv_sdnn_ms",
+  hrv_sdnn_ms: "hrv_sdnn_ms",
+  heart_rate_variability: "hrv_sdnn_ms",
+  rhr: "resting_hr",
+  resting_hr: "resting_hr",
+  resting_heart_rate: "resting_hr",
+  sleep: "sleep_hours",
+  sleep_hours: "sleep_hours",
+  vo2max: "vo2max",
+  vo2_max: "vo2max",
+  weight: "body_mass_kg",
+  weight_kg: "body_mass_kg",
+  body_mass_kg: "body_mass_kg",
 };
 
 // How repeated points inside one day collapse. Mirrors the iOS queries:
@@ -293,6 +317,9 @@ function mapWorkout(w) {
   // `duration` is seconds or minutes, so that's only the fallback.
   let duration_s = null;
   if (end && end.ms > start.ms) duration_s = (end.ms - start.ms) / 1000;
+  // A Shortcut hands us seconds outright — unambiguous, so it wins over the
+  // end−start estimate only when the latter is unavailable.
+  if (duration_s === null) duration_s = num(w.duration_s);
   if (duration_s === null) {
     const d = num(w.duration);
     // 300 is the split: <300 can only sensibly be minutes (a logged session
@@ -301,16 +328,30 @@ function mapWorkout(w) {
   }
 
   const activity = activityFromName(
-    w.name !== undefined ? w.name : (w.workoutActivityType !== undefined ? w.workoutActivityType : w.type)
+    w.activity !== undefined ? w.activity
+      : (w.name !== undefined ? w.name
+        : (w.workoutActivityType !== undefined ? w.workoutActivityType : w.type))
   );
-  const rawDistance = w.distance !== undefined ? w.distance : w.totalDistance;
-  const distance_m = toMeters(rawDistance, null, "km");
+
+  // distance_m / avg_hr / max_hr / elevation_gain_m are the flat (Shortcuts)
+  // spellings: already in the units the schema wants, so no conversion.
+  let distance_m = num(w.distance_m);
+  if (distance_m === null) {
+    distance_m = toMeters(w.distance !== undefined ? w.distance : w.totalDistance, null, "km");
+  }
+
   const hr = heartRateFrom(w);
-  const elevation = toMeters(
-    w.elevationUp !== undefined ? w.elevationUp : (w.elevation_up !== undefined ? w.elevation_up : w.elevationAscended),
-    null,
-    "m"
-  );
+  if (hr.avg === null) hr.avg = num(w.avg_hr);
+  if (hr.max === null) hr.max = num(w.max_hr);
+
+  let elevation = num(w.elevation_gain_m);
+  if (elevation === null) {
+    elevation = toMeters(
+      w.elevationUp !== undefined ? w.elevationUp : (w.elevation_up !== undefined ? w.elevation_up : w.elevationAscended),
+      null,
+      "m"
+    );
+  }
 
   // Stable dedupe key. The exporter's workout id IS the HealthKit UUID, so
   // runs the old native app already uploaded are recognised, not duplicated.
@@ -437,9 +478,49 @@ function pickArray(body, key) {
   return [];
 }
 
+// Flat daily recovery row → exporter-shaped metric entries, so everything
+// downstream (day grouping, wake-day sleep, upsert) stays on one code path.
+function flatToMetrics(body) {
+  const out = [];
+  if (!body || typeof body !== "object") return out;
+  const date = body.date !== undefined ? body.date : body.day;
+  if (date === undefined || date === null) return out;
+
+  for (const key of Object.keys(body)) {
+    const field = FLAT_METRIC_KEYS[normName(key)];
+    if (!field) continue;
+    const v = num(body[key]);
+    if (v === null) continue;
+    // hrv is declared in ms and weight in kg here — see FLAT_METRIC_KEYS.
+    out.push({ name: field, units: field === "hrv_sdnn_ms" ? "ms" : "", data: [{ date: date, qty: v }] });
+  }
+  return out;
+}
+
+// Accepts three shapes, so a paid exporter and a free Shortcut can both post:
+//   ① {"data":{"workouts":[…],"metrics":[…]}}   the exporter's REST payload
+//   ② {"date":"…","hrv":45,"rhr":48,…}          one flat day (Shortcuts)
+//   ③ {"workout":{…}} or a bare flat workout    one session (Shortcuts loop)
+function normalizePayload(body) {
+  const workouts = pickArray(body, "workouts").slice();
+  const metrics = pickArray(body, "metrics").slice();
+  const d = body && typeof body === "object" ? body : {};
+
+  const single =
+    d.workout && typeof d.workout === "object" ? d.workout
+      : (d.activity !== undefined && (d.start !== undefined || d.date !== undefined)) ? d
+        : null;
+  if (single) workouts.push(single);
+
+  for (const m of flatToMetrics(d)) metrics.push(m);
+
+  return { workouts: workouts, metrics: metrics };
+}
+
 function ingest(app, body) {
-  const workouts = pickArray(body, "workouts");
-  const metrics = pickArray(body, "metrics");
+  const normalized = normalizePayload(body);
+  const workouts = normalized.workouts;
+  const metrics = normalized.metrics;
 
   const report = {
     runs_created: 0,
@@ -552,4 +633,6 @@ module.exports = {
   heartRateFrom: heartRateFrom,
   mapWorkout: mapWorkout,
   mapMetrics: mapMetrics,
+  flatToMetrics: flatToMetrics,
+  normalizePayload: normalizePayload,
 };

@@ -224,23 +224,81 @@ echo HEALTH_INGEST_TOKEN=<token> >> ~/pain-enjoyer/server/.env
 With no `HEALTH_INGEST_TOKEN` set the route returns **503** — it never stands
 open. A token shorter than 16 chars is refused for the same reason.
 
-### Phone setup (once)
+### Phone setup — option A: Apple Shortcuts (free)
 
-1. App Store → **Health Auto Export** (or any exporter that can POST JSON to a
-   REST endpoint). Grant it HealthKit **read** access.
-2. New Automation → type **REST API**:
+Health Auto Export is only free for 7 days, so this is the default path.
+Shortcuts ships on every iPhone and the endpoint accepts a **flat shape** you
+can build with a single Dictionary action:
+
+```json
+{"date":"2026-08-22","hrv":45.2,"rhr":48,"sleep":7.1,"vo2max":51.4,"weight":70}
+```
+
+**Shortcut 1 — daily recovery** (≈12 actions, no loops):
+
+1. For each of Heart Rate Variability, Resting Heart Rate, VO₂ Max, Weight
+   (and Sleep if your Health has it):
+   - **Find Health Samples** → Type = the metric, Start Date = *today*
+   - **Calculate Statistics** → Average → over those samples
+   - **Set Variable** → `hrv` / `rhr` / `vo2max` / `weight` / `sleep`
+2. **Format Date** → Current Date, custom format `yyyy-MM-dd` → variable `day`
+3. **Dictionary** → `date`=`day`, `hrv`, `rhr`, `sleep`, `vo2max`, `weight`
+   (omit any key you don't have — a partial post never nulls what's already
+   stored)
+4. **Get Contents of URL**
    - URL `https://coach.bennpc.uk/api/health/ingest?token=<token>`
-     (the query param is the compatible-everywhere option; `X-Ingest-Token:`
-     and `Authorization: Bearer` headers work too if your build supports them)
-   - Method **POST**, `Content-Type: application/json`
-   - Export **Workouts** *and* **Health Metrics**
-   - Metrics: Heart Rate Variability, Resting Heart Rate, Sleep Analysis,
-     VO₂ Max, Weight & Body Mass
-   - Schedule: hourly or daily — posting is **idempotent**, so overlap is free
-3. First export: widen the date range (180 days) once to backfill, then drop
-   back to a rolling window.
-4. Safari → `https://coach.bennpc.uk` → Share → **Add to Home Screen**. It
-   launches standalone (no browser chrome) and never expires.
+   - Method **POST**, Headers `Content-Type: application/json`
+   - Request Body **JSON** → the Dictionary from step 3
+5. Shortcuts → **Automation** → *Time of Day*, daily (e.g. 08:00), and turn
+   **Ask Before Running off** so it fires unattended.
+
+Units in this shape: **weight in kg, sleep in hours, HRV in ms** (no `units`
+field — the exporter path is the one that converts lb/ms).
+
+**Shortcut 2 — workouts.** First check whether your Shortcuts app has a
+**Find Workouts** action (search "workout" in the action list — availability
+depends on iOS version). If it does: *Repeat with Each* workout, build a
+Dictionary, and POST one per iteration — posting is idempotent, so one call
+per workout is fine:
+
+```json
+{"workout":{"id":"<workout UUID>","activity":"Running",
+            "start":"2026-08-22 06:30:00 +0800",
+            "duration_s":2400,"distance_m":8000,
+            "avg_hr":146,"max_hr":171,"elevation_gain_m":42}}
+```
+
+The `workout` wrapper is optional — a bare flat object works too. Here
+`distance_m`/`duration_s`/`avg_hr`/`max_hr` are already in the schema's units,
+so nothing is converted. `id` is what makes re-posts idempotent: use the
+workout's UUID if you can get it; without one a key is synthesised from the
+start instant, which still dedupes but won't match rows the old native app
+uploaded.
+
+> ⚠ If your Shortcuts build has **no** workout action, recovery metrics still
+> work (they're plain quantity samples) but runs have no free automated path —
+> the options are a one-time-purchase exporter (HealthFit, RunGap) or adding
+> manual run entry to the web app, which it doesn't have yet.
+
+### Phone setup — option B: Health Auto Export (paid after the trial)
+
+Same endpoint, no Shortcut to build. New Automation → type **REST API**:
+
+- URL `https://coach.bennpc.uk/api/health/ingest?token=<token>`
+  (the query param is the compatible-everywhere option; `X-Ingest-Token:` and
+  `Authorization: Bearer` headers work too if your build supports them)
+- Method **POST**, `Content-Type: application/json`
+- Export **Workouts** *and* **Health Metrics**
+- Metrics: Heart Rate Variability, Resting Heart Rate, Sleep Analysis,
+  VO₂ Max, Weight & Body Mass
+- Schedule: hourly or daily — posting is **idempotent**, so overlap is free
+- First export: widen the date range (180 days) once to backfill, then drop
+  back to a rolling window
+
+### Then, either way
+
+Safari → `https://coach.bennpc.uk` → Share → **Add to Home Screen**. It
+launches standalone (no browser chrome) and never expires.
 
 Runs still reach the server the same way they always did — Runkeeper writes
 them to Apple Health, and the exporter forwards them. That path is untouched.
@@ -265,8 +323,13 @@ loud rather than silent:
   If a metric you *want* shows up in this list, its name changed upstream and
   the alias table in `health_ingest.js` needs it.
 
-Smoke test: `./scripts/test-health-ingest-local.sh` (23 checks — auth, unit
-conversion, dedupe, wake-day sleep, partial upsert, engine integration, PWA).
+The endpoint accepts three shapes so a paid exporter and a free Shortcut can
+both post: the exporter's nested `{data:{workouts,metrics}}`, a flat daily
+recovery row, and a single flat workout.
+
+Smoke test: `./scripts/test-health-ingest-local.sh` (28 checks — auth, unit
+conversion, dedupe, wake-day sleep, partial upsert, both flat shapes, engine
+integration, PWA).
 
 ### What this gives up
 

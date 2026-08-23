@@ -273,7 +273,19 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   can't run a PB login); unset ⇒ 503, never open; <16 chars refused.
   ② **web app is now installable** — `manifest.webmanifest` + apple meta tags
   + icons from the app icon; Safari → Add to Home Screen, never expires.
-  Suite: `scripts/test-health-ingest-local.sh` (23 checks, port 8096).
+  ③ **free Shortcuts path (added same day — Health Auto Export is only free
+  for 7 days)**: the endpoint also accepts a FLAT daily row
+  (`{"date":"…","hrv":45,"rhr":48,"sleep":7.1,"vo2max":51,"weight":70}` — kg
+  and hours, one Shortcuts Dictionary action) and a FLAT single workout
+  (`{"workout":{id,activity,start,duration_s,distance_m,avg_hr,max_hr}}`,
+  wrapper optional, already in schema units). `normalizePayload` folds all
+  three shapes onto one code path. Post-per-workout is fine — idempotent.
+  ⚠ OPEN: Shortcuts' recovery metrics are certain (plain quantity samples),
+  but whether it can enumerate WORKOUTS depends on his iOS build having a
+  "Find Workouts" action — unverified, Ben must check. If absent, runs have no
+  free automated path and the web app has NO manual run entry (only PATCH of
+  existing rows) — offered to add it.
+  Suite: `scripts/test-health-ingest-local.sh` (28 checks, port 8096).
   **Gives up (native-only, stated honestly): GPS route maps (HKWorkoutRoute)
   and per-km splits** (M7 Phase 4 durability degrades gracefully; old rows
   keep theirs). Everything else was already at web parity.

@@ -7,8 +7,9 @@
 #   ③ metrics → recovery_daily: HRV mean, RHR, VO₂max, lb→kg weight, and
 #      sleep attributed to the WAKE day (matches HealthKitService.swift)
 #   ④ partial re-post upserts without nulling fields it didn't carry
-#   ⑤ the engine still reads a database fed this way
-#   ⑥ the web app is installable (manifest + icons + apple meta tags)
+#   ⑤ the FREE Shortcuts path: flat daily row + flat workout shapes
+#   ⑥ the engine still reads a database fed this way
+#   ⑦ the web app is installable (manifest + icons + apple meta tags)
 #
 # Usage: ./scripts/test-health-ingest-local.sh
 # Requires: curl, python3. Reuses the cached pocketbase binary.
@@ -231,15 +232,71 @@ check "weight updated, HRV/sleep preserved (Bearer auth path works)" \
 check "row was updated, not duplicated" bash -c \
   "python3 -c \"import json;r=json.load(open('$WORK/resp.json'));assert r['recovery_updated']==1 and r['recovery_created']==0, r\""
 
-# ── ⑤ the engine reads a database fed this way ───────────────────────────
-echo "· ⑤ engine over ingested data…"
+# ── ⑤ the free Shortcuts path: flat shapes ───────────────────────────────
+echo "· ⑤ flat Shortcuts payloads (no paid exporter)…"
+
+# ⑤a one flat daily row — what a Shortcut builds with a single Dictionary
+cat > "$WORK/flat-day.json" <<JSON
+{"date":"$D3","hrv":52.5,"rhr":46,"sleep":7.8,"vo2max":52.1,"weight":69.9}
+JSON
+ingest good "$WORK/flat-day.json" >/dev/null
+curl -fsS "$BASE/api/collections/recovery_daily/records?perPage=50&sort=-date" "${AUTH[@]}" > "$WORK/rec3.json"
+python3 <<EOF > "$WORK/flatday.txt" 2>&1
+import json
+by = {r["date"][:10]: r for r in json.load(open("$WORK/rec3.json"))["items"]}
+d = by["$D3"]
+assert d["hrv_sdnn_ms"] == 52.5, d
+assert d["resting_hr"] == 46 and d["sleep_hours"] == 7.8, d
+assert d["vo2max"] == 52.1 and d["body_mass_kg"] == 69.9, d
+print("ok")
+EOF
+check "flat {date,hrv,rhr,sleep,vo2max,weight} → one recovery row" \
+  bash -c "grep -q '^ok\$' '$WORK/flatday.txt'"
+
+# ⑤b one flat workout — what a Shortcut posts per iteration of a Repeat loop
+cat > "$WORK/flat-run.json" <<JSON
+{"workout":{"id":"SC-RUN-9001","activity":"Running","start":"$D1 06:30:00 +0800",
+ "duration_s":2400,"distance_m":8000,"avg_hr":146,"max_hr":171,"elevation_gain_m":42}}
+JSON
+ingest good "$WORK/flat-run.json" >/dev/null
+check "flat workout reported as created" bash -c \
+  "python3 -c \"import json;r=json.load(open('$WORK/resp.json'));assert r['runs_created']==1, r\""
+curl -fsS "$BASE/api/collections/runs/records?perPage=50&sort=-date" "${AUTH[@]}" > "$WORK/runs2.json"
+python3 <<EOF > "$WORK/flatrun.txt" 2>&1
+import json
+by = {r["healthkit_uuid"]: r for r in json.load(open("$WORK/runs2.json"))["items"]}
+r = by["SC-RUN-9001"]
+assert r["distance_m"] == 8000, r["distance_m"]     # already metres — no conversion
+assert r["duration_s"] == 2400, r["duration_s"]     # already seconds
+assert r["avg_hr"] == 146 and r["max_hr"] == 171, r
+assert r["elevation_gain_m"] == 42, r["elevation_gain_m"]
+assert r["activity_type"] == "running", r["activity_type"]
+print("ok")
+EOF
+check "flat workout mapped without unit conversion" \
+  bash -c "grep -q '^ok\$' '$WORK/flatrun.txt'"
+ingest good "$WORK/flat-run.json" >/dev/null
+check "flat workout dedupes on re-post" bash -c \
+  "python3 -c \"import json;r=json.load(open('$WORK/resp.json'));assert r['runs_created']==0 and r['runs_duplicate']==1, r\""
+
+# ⑤c a bare flat workout (no wrapper) still works
+cat > "$WORK/flat-bare.json" <<JSON
+{"id":"SC-HIKE-9002","activity":"Hiking","start":"$D1 14:00:00 +0800",
+ "duration_s":5400,"distance_m":6200}
+JSON
+ingest good "$WORK/flat-bare.json" >/dev/null
+check "bare flat workout (no \"workout\" wrapper) created" bash -c \
+  "python3 -c \"import json;r=json.load(open('$WORK/resp.json'));assert r['runs_created']==1, r\""
+
+# ── ⑥ the engine reads a database fed this way ───────────────────────────
+echo "· ⑥ engine over ingested data…"
 check "GET /api/coach/engine still 200s" bash -c \
   "curl -fsS '$BASE/api/coach/engine' -H 'Authorization: $TOKEN' -o '$WORK/engine.json'"
 check "engine saw the ingested run (10.2 km)" bash -c "grep -q '10.2' '$WORK/engine.json'"
 check "cross-training facts saw the hike" bash -c "grep -qi 'hik' '$WORK/engine.json'"
 
-# ── ⑥ server with no token configured refuses outright ───────────────────
-echo "· ⑥ unset HEALTH_INGEST_TOKEN → 503 (never stands open)…"
+# ── ⑦ server with no token configured refuses outright ───────────────────
+echo "· ⑦ unset HEALTH_INGEST_TOKEN → 503 (never stands open)…"
 kill "$PB_PID" 2>/dev/null; wait "$PB_PID" 2>/dev/null
 LLM_PROVIDER=mock WEATHER_MODE=off \
 "$PB_BIN" serve --dir "$WORK/pb_data" --hooksDir "$REPO/server/pb_hooks" \
@@ -251,8 +308,8 @@ CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/api/health/ingest"
   -H 'content-type: application/json' --data-binary "@$WORK/payload.json")
 check "no server token → 503" [ "$CODE" = 503 ]
 
-# ── ⑦ web app is installable ─────────────────────────────────────────────
-echo "· ⑦ web app installable to the home screen…"
+# ── ⑧ web app is installable ─────────────────────────────────────────────
+echo "· ⑧ web app installable to the home screen…"
 check "manifest.webmanifest exists and is valid JSON" bash -c \
   "python3 -c \"import json;m=json.load(open('$REPO/web/manifest.webmanifest'));assert m['display']=='standalone' and m['icons']\""
 check "apple-touch-icon 180 present" [ -f "$REPO/web/icon-180.png" ]
