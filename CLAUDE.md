@@ -285,7 +285,13 @@ Ben; he's technical and cost-conscious (target ≈ $0).
   "Find Workouts" action — unverified, Ben must check. If absent, runs have no
   free automated path and the web app has NO manual run entry (only PATCH of
   existing rows) — offered to add it.
-  Suite: `scripts/test-health-ingest-local.sh` (28 checks, port 8096).
+  ④ **URL-param ingest (Ben: "I don't understand how to set up the shortcut")**
+  — the flat data also rides in the QUERY STRING, so the Shortcut needs NO
+  Dictionary action and NO request body: Find Health Samples ×4 → Calculate
+  Statistics ×4 → Format Date → Text (builds the URL) → Get Contents of URL
+  (POST). README §M12 has the tap-by-tap walkthrough. Sleep is documented as
+  skippable (Health stores it as a category, Calculate Statistics may refuse).
+  Suite: `scripts/test-health-ingest-local.sh` (32 checks, port 8096).
   **Gives up (native-only, stated honestly): GPS route maps (HKWorkoutRoute)
   and per-km splits** (M7 Phase 4 durability degrades gracefully; old rows
   keep theirs). Everything else was already at web parity.

@@ -200,6 +200,8 @@ function round1(v) {
 function num(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
+  // Query strings arrive as ["45.2"] when a param repeats — take the first.
+  if (Array.isArray(v)) return v.length ? num(v[0]) : null;
   if (typeof v === "object") {
     if (v.qty !== undefined) return num(v.qty);
     if (v.value !== undefined) return num(v.value);
@@ -207,6 +209,12 @@ function num(v) {
   }
   const f = parseFloat(v);
   return isFinite(f) ? f : null;
+}
+
+// Same unwrapping for the string-valued query params (date, activity, start).
+function scalar(v) {
+  if (Array.isArray(v)) return v.length ? scalar(v[0]) : undefined;
+  return v;
 }
 
 function unitsOf(v, fallback) {
@@ -309,9 +317,9 @@ function heartRateFrom(w) {
 // ── workout → runs row ─────────────────────────────────────────────────
 function mapWorkout(w) {
   if (!w || typeof w !== "object") return null;
-  const start = parseStamp(w.start !== undefined ? w.start : (w.startDate !== undefined ? w.startDate : w.date));
+  const start = parseStamp(scalar(w.start !== undefined ? w.start : (w.startDate !== undefined ? w.startDate : w.date)));
   if (!start) return null;
-  const end = parseStamp(w.end !== undefined ? w.end : w.endDate);
+  const end = parseStamp(scalar(w.end !== undefined ? w.end : w.endDate));
 
   // Prefer end−start: it's unambiguous. Exporter versions disagree on whether
   // `duration` is seconds or minutes, so that's only the fallback.
@@ -327,11 +335,11 @@ function mapWorkout(w) {
     if (d !== null && d > 0) duration_s = d >= 300 ? d : d * 60;
   }
 
-  const activity = activityFromName(
+  const activity = activityFromName(scalar(
     w.activity !== undefined ? w.activity
       : (w.name !== undefined ? w.name
         : (w.workoutActivityType !== undefined ? w.workoutActivityType : w.type))
-  );
+  ));
 
   // distance_m / avg_hr / max_hr / elevation_gain_m are the flat (Shortcuts)
   // spellings: already in the units the schema wants, so no conversion.
@@ -356,9 +364,9 @@ function mapWorkout(w) {
   // Stable dedupe key. The exporter's workout id IS the HealthKit UUID, so
   // runs the old native app already uploaded are recognised, not duplicated.
   // Without one, synthesise from the start instant so re-posts still dedupe.
-  let uuid = String(
+  let uuid = String(scalar(
     w.id !== undefined ? w.id : (w.uuid !== undefined ? w.uuid : (w.healthkit_uuid !== undefined ? w.healthkit_uuid : ""))
-  ).trim();
+  ) || "").trim();
   if (!uuid) uuid = "hae-" + start.ms + "-" + activity;
 
   return {
@@ -368,7 +376,7 @@ function mapWorkout(w) {
     avg_hr: round1(hr.avg),
     max_hr: round1(hr.max),
     elevation_gain_m: elevation === null ? null : round1(elevation),
-    source_app: String(w.source || "Health Auto Export"),
+    source_app: String(scalar(w.source) || "HealthKit"),
     healthkit_uuid: uuid,
     activity_type: activity,
   };
@@ -483,7 +491,7 @@ function pickArray(body, key) {
 function flatToMetrics(body) {
   const out = [];
   if (!body || typeof body !== "object") return out;
-  const date = body.date !== undefined ? body.date : body.day;
+  const date = scalar(body.date !== undefined ? body.date : body.day);
   if (date === undefined || date === null) return out;
 
   for (const key of Object.keys(body)) {
@@ -501,24 +509,29 @@ function flatToMetrics(body) {
 //   ① {"data":{"workouts":[…],"metrics":[…]}}   the exporter's REST payload
 //   ② {"date":"…","hrv":45,"rhr":48,…}          one flat day (Shortcuts)
 //   ③ {"workout":{…}} or a bare flat workout    one session (Shortcuts loop)
-function normalizePayload(body) {
+// ④ is the same flat data in the QUERY STRING, which is what makes a beginner
+// Shortcut viable: no Dictionary action and no request body to configure —
+// just one Text action that builds the URL, with variables tapped in.
+function normalizePayload(body, query) {
   const workouts = pickArray(body, "workouts").slice();
   const metrics = pickArray(body, "metrics").slice();
-  const d = body && typeof body === "object" ? body : {};
 
-  const single =
-    d.workout && typeof d.workout === "object" ? d.workout
-      : (d.activity !== undefined && (d.start !== undefined || d.date !== undefined)) ? d
-        : null;
-  if (single) workouts.push(single);
-
-  for (const m of flatToMetrics(d)) metrics.push(m);
+  for (const src of [body, query]) {
+    if (!src || typeof src !== "object") continue;
+    const single =
+      src.workout && typeof src.workout === "object" ? src.workout
+        : (scalar(src.activity) !== undefined
+            && (scalar(src.start) !== undefined || scalar(src.date) !== undefined)) ? src
+          : null;
+    if (single) workouts.push(single);
+    for (const m of flatToMetrics(src)) metrics.push(m);
+  }
 
   return { workouts: workouts, metrics: metrics };
 }
 
-function ingest(app, body) {
-  const normalized = normalizePayload(body);
+function ingest(app, body, query) {
+  const normalized = normalizePayload(body, query);
   const workouts = normalized.workouts;
   const metrics = normalized.metrics;
 
@@ -633,6 +646,7 @@ module.exports = {
   heartRateFrom: heartRateFrom,
   mapWorkout: mapWorkout,
   mapMetrics: mapMetrics,
+  scalar: scalar,
   flatToMetrics: flatToMetrics,
   normalizePayload: normalizePayload,
 };

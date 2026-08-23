@@ -7,7 +7,8 @@
 #   ③ metrics → recovery_daily: HRV mean, RHR, VO₂max, lb→kg weight, and
 #      sleep attributed to the WAKE day (matches HealthKitService.swift)
 #   ④ partial re-post upserts without nulling fields it didn't carry
-#   ⑤ the FREE Shortcuts path: flat daily row + flat workout shapes
+#   ⑤ the FREE Shortcuts path: flat daily row, flat workout, and the
+#      same data as URL PARAMS ONLY (no request body to configure)
 #   ⑥ the engine still reads a database fed this way
 #   ⑦ the web app is installable (manifest + icons + apple meta tags)
 #
@@ -78,6 +79,8 @@ py() { python3 -c "$1"; }
 # (+0800 = Ben's zone). D0 = today, D1 = yesterday, …
 day() { python3 -c "import datetime;print((datetime.date.today()-datetime.timedelta(days=$1)).isoformat())"; }
 D1=$(day 1); D2=$(day 2); D3=$(day 3)
+# URL-encoded stamp for the query-param test (a space would break the URL)
+D4T="$(day 4)T06%3A00%3A00%2B08%3A00"
 
 # ── the payload: shaped like Health Auto Export's REST export ─────────────
 cat > "$WORK/payload.json" <<JSON
@@ -287,6 +290,39 @@ JSON
 ingest good "$WORK/flat-bare.json" >/dev/null
 check "bare flat workout (no \"workout\" wrapper) created" bash -c \
   "python3 -c \"import json;r=json.load(open('$WORK/resp.json'));assert r['runs_created']==1, r\""
+
+# ⑤d URL-PARAMS ONLY — no request body at all. This is the shape the
+#    beginner Shortcut posts (one Text action builds the URL).
+D4=$(day 4)
+check "query-param daily row → recovery row" bash -c \
+  "curl -fsS -X POST '$BASE/api/health/ingest?token=$TOKEN_GOOD&date=$D4&hrv=38.5&rhr=51&sleep=6.4&vo2max=50.2&weight=71.2' -o '$WORK/q1.json' && python3 -c \"import json;r=json.load(open('$WORK/q1.json'));assert r['recovery_created']==1, r\""
+curl -fsS "$BASE/api/collections/recovery_daily/records?perPage=50&sort=-date" "${AUTH[@]}" > "$WORK/rec4.json"
+python3 <<EOF > "$WORK/qday.txt" 2>&1
+import json
+by = {r["date"][:10]: r for r in json.load(open("$WORK/rec4.json"))["items"]}
+d = by["$D4"]
+assert d["hrv_sdnn_ms"] == 38.5 and d["resting_hr"] == 51, d
+assert d["sleep_hours"] == 6.4 and d["vo2max"] == 50.2, d
+assert d["body_mass_kg"] == 71.2, d
+print("ok")
+EOF
+check "query-param values parsed from strings correctly" \
+  bash -c "grep -q '^ok\$' '$WORK/qday.txt'"
+
+check "query-param workout → run row" bash -c \
+  "curl -fsS -X POST '$BASE/api/health/ingest?token=$TOKEN_GOOD&id=SC-RUN-9003&activity=Running&start=$D4T&duration_s=1800&distance_m=6000&avg_hr=140&max_hr=165' -o '$WORK/q2.json' && python3 -c \"import json;r=json.load(open('$WORK/q2.json'));assert r['runs_created']==1, r\""
+curl -fsS "$BASE/api/collections/runs/records?perPage=50&sort=-date" "${AUTH[@]}" > "$WORK/runs3.json"
+python3 <<EOF > "$WORK/qrun.txt" 2>&1
+import json
+by = {r["healthkit_uuid"]: r for r in json.load(open("$WORK/runs3.json"))["items"]}
+r = by["SC-RUN-9003"]
+assert r["distance_m"] == 6000 and r["duration_s"] == 1800, r
+assert r["avg_hr"] == 140 and r["max_hr"] == 165, r
+assert r["activity_type"] == "running", r["activity_type"]
+print("ok")
+EOF
+check "query-param workout fields all landed" \
+  bash -c "grep -q '^ok\$' '$WORK/qrun.txt'"
 
 # ── ⑥ the engine reads a database fed this way ───────────────────────────
 echo "· ⑥ engine over ingested data…"

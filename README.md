@@ -227,58 +227,96 @@ open. A token shorter than 16 chars is refused for the same reason.
 ### Phone setup — option A: Apple Shortcuts (free)
 
 Health Auto Export is only free for 7 days, so this is the default path.
-Shortcuts ships on every iPhone and the endpoint accepts a **flat shape** you
-can build with a single Dictionary action:
+Shortcuts ships on every iPhone, and the endpoint reads the values **straight
+out of the URL** — so there is no Dictionary action to configure and no
+request body. The whole Shortcut is "read some numbers, paste them into a URL,
+call it".
 
-```json
-{"date":"2026-08-22","hrv":45.2,"rhr":48,"sleep":7.1,"vo2max":51.4,"weight":70}
+#### Shortcut 1 — daily recovery numbers
+
+Open **Shortcuts** → **+** (new shortcut) → **Add Action**, and build this.
+Search the action name in the box each time.
+
+**Steps 1–8: read the four numbers.** Do this block four times, once per
+metric (Heart Rate Variability, Resting Heart Rate, VO₂ Max, Weight):
+
+1. Add action **Find Health Samples**. It appears as
+   *"Find All Health Samples where …"*. Tap the blue/underlined parts:
+   - tap **Health Samples** → choose the metric
+   - tap **Add Filter** → *Start Date* → **is today**
+2. Add action **Calculate Statistics**. It reads
+   *"Calculate Average of Health Samples"* — check that the input says
+   *Health Samples* (it auto-fills from step 1) and the operation says
+   **Average**.
+3. Add action **Set Variable**, and name it `hrv`, `rhr`, `vo2max`, `weight`
+   respectively. (Tap *Variable Name* and type it.)
+
+**Step 9: today's date, formatted.**
+
+4. Add action **Format Date**. Tap *Date* → pick **Current Date**. Set
+   *Date Format* → **Custom**, and in the Format String type exactly:
+   `yyyy-MM-dd`
+5. Add action **Set Variable** → name it `day`.
+
+**Step 10: build the URL.** Add action **Text** and type this as ONE line,
+pasting your token where shown. Where you see a variable name below, don't
+type it — tap the variable button above the keyboard (or type `/` in newer
+iOS) and pick the variable you set earlier:
+
+```
+https://coach.bennpc.uk/api/health/ingest?token=YOUR_TOKEN&date=[day]&hrv=[hrv]&rhr=[rhr]&vo2max=[vo2max]&weight=[weight]
 ```
 
-**Shortcut 1 — daily recovery** (≈12 actions, no loops):
+`[day]`, `[hrv]`, … stand for the inserted variables — they'll show as
+coloured chips, not literal brackets.
 
-1. For each of Heart Rate Variability, Resting Heart Rate, VO₂ Max, Weight
-   (and Sleep if your Health has it):
-   - **Find Health Samples** → Type = the metric, Start Date = *today*
-   - **Calculate Statistics** → Average → over those samples
-   - **Set Variable** → `hrv` / `rhr` / `vo2max` / `weight` / `sleep`
-2. **Format Date** → Current Date, custom format `yyyy-MM-dd` → variable `day`
-3. **Dictionary** → `date`=`day`, `hrv`, `rhr`, `sleep`, `vo2max`, `weight`
-   (omit any key you don't have — a partial post never nulls what's already
-   stored)
-4. **Get Contents of URL**
-   - URL `https://coach.bennpc.uk/api/health/ingest?token=<token>`
-   - Method **POST**, Headers `Content-Type: application/json`
-   - Request Body **JSON** → the Dictionary from step 3
-5. Shortcuts → **Automation** → *Time of Day*, daily (e.g. 08:00), and turn
-   **Ask Before Running off** so it fires unattended.
+**Step 11: call it.**
 
-Units in this shape: **weight in kg, sleep in hours, HRV in ms** (no `units`
-field — the exporter path is the one that converts lb/ms).
+6. Add action **Get Contents of URL**. Tap *URL* → insert the **Text**
+   variable from step 10. Then expand **Show More** and set **Method** to
+   **POST**. Nothing else needs changing — no headers, no request body.
 
-**Shortcut 2 — workouts.** First check whether your Shortcuts app has a
-**Find Workouts** action (search "workout" in the action list — availability
-depends on iOS version). If it does: *Repeat with Each* workout, build a
-Dictionary, and POST one per iteration — posting is idempotent, so one call
-per workout is fine:
+Tap ▶ to test. You should get back a small JSON report like
+`{"recovery_created":1,…}`. Check the web app's Trends tab to see the numbers.
 
-```json
-{"workout":{"id":"<workout UUID>","activity":"Running",
-            "start":"2026-08-22 06:30:00 +0800",
-            "duration_s":2400,"distance_m":8000,
-            "avg_hr":146,"max_hr":171,"elevation_gain_m":42}}
+**Step 12: make it run itself.** Shortcuts → **Automation** tab → **+** →
+**Time of Day** → pick a time (08:00 is good — the metrics have settled) →
+Daily → choose this shortcut → and turn **Ask Before Running off** so it fires
+unattended.
+
+> Sleep is optional and the fiddliest — Health stores it as a category, not a
+> plain number, so `Calculate Statistics` may not accept it. Skip it; leave
+> `&sleep=` out of the URL entirely. Omitted values are never overwritten with
+> nulls, and the engine treats sleep as optional.
+
+#### Shortcut 2 — workouts
+
+First check whether your Shortcuts app has a **Find Workouts** action (type
+"workout" into the action search — availability depends on iOS version).
+
+If it's there: **Find Workouts** (filter *Start Date is today*) →
+**Repeat with Each** → inside the loop a **Text** action building this URL,
+then **Get Contents of URL** (POST). One call per workout is fine — posting
+is idempotent, so nothing duplicates:
+
+```
+https://coach.bennpc.uk/api/health/ingest?token=YOUR_TOKEN&id=[uuid]&activity=Running&start=[start]&duration_s=[seconds]&distance_m=[metres]&avg_hr=[avg]&max_hr=[max]
 ```
 
-The `workout` wrapper is optional — a bare flat object works too. Here
-`distance_m`/`duration_s`/`avg_hr`/`max_hr` are already in the schema's units,
-so nothing is converted. `id` is what makes re-posts idempotent: use the
-workout's UUID if you can get it; without one a key is synthesised from the
-start instant, which still dedupes but won't match rows the old native app
-uploaded.
+Inside the loop, tap a variable chip → **Repeat Item** → then pick the detail
+you want (Distance, Duration, Start Date…). `distance_m` is **metres** and
+`duration_s` is **seconds**; if the workout detail gives you kilometres, add a
+**Calculate** action (× 1000) first. `start` must be `yyyy-MM-dd HH:mm:ss`
+(URL-encode the space as `%20`, or use the ISO `T` form instead).
+
+`id` is what makes re-posts idempotent — use the workout's UUID if the action
+exposes it. Without one, a key is synthesised from the start instant, which
+still dedupes but won't match rows the old native app uploaded.
 
 > ⚠ If your Shortcuts build has **no** workout action, recovery metrics still
-> work (they're plain quantity samples) but runs have no free automated path —
-> the options are a one-time-purchase exporter (HealthFit, RunGap) or adding
-> manual run entry to the web app, which it doesn't have yet.
+> work but runs have no free automated path — the options are a
+> one-time-purchase exporter (HealthFit, RunGap) or manual run entry in the web
+> app, which it doesn't have yet.
 
 ### Phone setup — option B: Health Auto Export (paid after the trial)
 
@@ -323,13 +361,14 @@ loud rather than silent:
   If a metric you *want* shows up in this list, its name changed upstream and
   the alias table in `health_ingest.js` needs it.
 
-The endpoint accepts three shapes so a paid exporter and a free Shortcut can
+The endpoint accepts four shapes so a paid exporter and a free Shortcut can
 both post: the exporter's nested `{data:{workouts,metrics}}`, a flat daily
-recovery row, and a single flat workout.
+recovery row, a single flat workout, and **the same flat data as plain URL
+parameters** (no request body — that's what keeps the Shortcut simple).
 
-Smoke test: `./scripts/test-health-ingest-local.sh` (28 checks — auth, unit
-conversion, dedupe, wake-day sleep, partial upsert, both flat shapes, engine
-integration, PWA).
+Smoke test: `./scripts/test-health-ingest-local.sh` (32 checks — auth, unit
+conversion, dedupe, wake-day sleep, partial upsert, all flat shapes, the
+query-param path, engine integration, PWA).
 
 ### What this gives up
 

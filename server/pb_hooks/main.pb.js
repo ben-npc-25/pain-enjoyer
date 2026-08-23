@@ -669,7 +669,9 @@ routerAdd("POST", "/api/health/ingest", (e) => {
       return e.json(401, { error: "bad or missing ingest token" });
     }
 
-    const report = ingest.ingest(e.app, info.body);
+    // query as well as body: the flat shape can ride in the URL, which is
+    // what makes a beginner-friendly Shortcut possible (no request body).
+    const report = ingest.ingest(e.app, info.body, info.query);
     console.log("health ingest:", JSON.stringify(report));
     return e.json(200, report);
   } catch (err) {
